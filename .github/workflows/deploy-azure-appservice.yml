@@ -9,8 +9,8 @@ on:
   workflow_dispatch:
 
 env:
-  AZURE_WEBAPP_NAME: 'sansamg-turf-api'
-  ACR_NAME: 'sansamgturfacr'
+  AZURE_WEBAPP_NAME: 'turf-api'
+  ACR_NAME: 'turfregistry'
   IMAGE_NAME: 'turf-backend'
 
 jobs:
