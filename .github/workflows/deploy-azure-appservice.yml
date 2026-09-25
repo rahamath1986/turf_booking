@@ -2,10 +2,11 @@ name: Build & Push to Azure Container Registry
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
     paths:
       - 'backend/**'
-      - '.github/workflows/deploy-azure-appservice.yml'
+      - '!backend/**/*.md'
+      - '!backend/docs/**'
   workflow_dispatch:
 
 env:
