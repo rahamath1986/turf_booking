@@ -2,13 +2,14 @@ name: Trigger auto deployment for turf-api
 
 # When this action will be executed
 on:
-  # Automatically trigger it when detected changes in repo
+  # Automatically trigger it ONLY when detected changes in backend folder
   push:
     branches: 
-      [ main ]
+      - main
     paths:
-    - '**'
-    - '.github/workflows/turf-api-AutoDeployTrigger-8a974341-62ef-4cd9-9efb-273aed97d9fe.yml'
+      - 'backend/**'
+      - '!backend/**/*.md'
+      - '!backend/docs/**'
 
   # Allow manual trigger 
   workflow_dispatch:      
@@ -17,12 +18,12 @@ jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
     permissions: 
-      id-token: write #This is required for requesting the OIDC JWT Token
-      contents: read #Required when GH token is used to authenticate with private repo
+      id-token: write # This is required for requesting the OIDC JWT Token
+      contents: read # Required when GH token is used to authenticate with private repo
 
     steps:
       - name: Checkout to the branch
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Azure Login
         uses: azure/login@v2
@@ -34,16 +35,11 @@ jobs:
       - name: Build and push container image to registry
         uses: azure/container-apps-deploy-action@v2
         with:
-          appSourcePath: ${{ github.workspace }}
-          _dockerfilePathKey_: _dockerfilePath_
-          _targetLabelKey_: _targetLabel_
+          appSourcePath: ${{ github.workspace }}/backend
+          dockerfilePath: Dockerfile
           registryUrl: turfregistry.azurecr.io
           registryUsername: ${{ secrets.TURFAPI_REGISTRY_USERNAME }}
           registryPassword: ${{ secrets.TURFAPI_REGISTRY_PASSWORD }}
           containerAppName: turf-api
           resourceGroup: rg-sansamg-platform
-          imageToBuild: turfregistry.azurecr.io/turf-api:${{ github.sha }}
-          _buildArgumentsKey_: |
-            _buildArgumentsValues_
-
-
+          imageToBuild: turfregistry.azurecr.io/turf-backend:${{ github.sha }}
