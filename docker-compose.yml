@@ -1,0 +1,41 @@
+services:
+  # Isolated PostgreSQL instance for Turf Booking platform
+  # Follows enterprise Azure multi-database design: distinct database turf_booking_db
+  turf-postgres:
+    image: postgres:16-alpine
+    container_name: turf-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: turf_booking_db
+      POSTGRES_USER: turf_admin
+      POSTGRES_PASSWORD: turf_secure_password_dev
+    ports:
+      - "5434:5432"
+    volumes:
+      - turf_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U turf_admin -d turf_booking_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis instance for distributed locks, slot hold expiration, and caching
+  turf-redis:
+    image: redis:7-alpine
+    container_name: turf-redis
+    restart: unless-stopped
+    ports:
+      - "6380:6379"
+    volumes:
+      - turf_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  turf_pgdata:
+    name: turf_booking_pgdata
+  turf_redisdata:
+    name: turf_booking_redisdata

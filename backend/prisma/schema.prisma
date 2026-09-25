@@ -1,0 +1,1040 @@
+// ==============================================================================
+// PRISMA SCHEMA - TURF BOOKING PLATFORM
+// Logical Database: turf_booking_db
+// Cloud Compatibility: Azure Database for PostgreSQL Flexible Server
+// Phase 2: Core PostgreSQL Database Schema
+// ==============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ------------------------------------------------------------------------------
+// USERS SUBSYSTEM
+// ------------------------------------------------------------------------------
+
+model User {
+  id              String    @id @default(uuid()) @db.Uuid
+  email           String    @unique @db.VarChar(255)
+  phone           String?   @unique @db.VarChar(30)
+  passwordHash    String    @map("password_hash") @db.VarChar(255)
+  fullName        String    @map("full_name") @db.VarChar(150)
+  avatarUrl       String?   @map("avatar_url") @db.VarChar(500)
+  isActive        Boolean   @default(true) @map("is_active")
+  isEmailVerified Boolean   @default(false) @map("is_email_verified")
+  isPhoneVerified Boolean   @default(false) @map("is_phone_verified")
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt       DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  // Relations
+  roles           UserRole[]
+  addresses       UserAddress[]
+  devices         UserDevice[]
+  refreshTokens   RefreshToken[]
+  passwordResets  PasswordResetToken[]
+  turfOwner              TurfOwner?
+  blockedSlots           BlockedSlot[]
+  slotHolds              SlotHold[]
+  bookings               Booking[]
+  bookingStatusHistories BookingStatusHistory[]
+  payments               Payment[]
+  refunds                Refund[]
+  notifications          Notification[]
+  auditLogs              AuditLog[]
+  favorites              Favorite[]
+  reviews                Review[]
+  couponUsages           CouponUsage[]
+  checkInAudits          BookingCheckInAudit[]
+  commissionsSet         OwnerCommissionConfig[] @relation("CommissionSetBy")
+  settlementsProcessed   Settlement[]            @relation("SettlementProcessedBy")
+
+  @@index([email, isActive])
+  @@index([phone])
+  @@index([deletedAt])
+  @@map("users")
+}
+
+model Role {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @unique @db.VarChar(50)
+  description String?  @db.VarChar(255)
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Relations
+  userRoles UserRole[]
+
+  @@map("roles")
+}
+
+model UserRole {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  roleId    String   @map("role_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Restrict)
+
+  @@unique([userId, roleId])
+  @@index([roleId])
+  @@map("user_roles")
+}
+
+model UserAddress {
+  id           String    @id @default(uuid()) @db.Uuid
+  userId       String    @map("user_id") @db.Uuid
+  addressLine1 String    @map("address_line_1") @db.VarChar(255)
+  addressLine2 String?   @map("address_line_2") @db.VarChar(255)
+  areaId       String?   @map("area_id") @db.Uuid
+  cityId       String?   @map("city_id") @db.Uuid
+  stateId      String?   @map("state_id") @db.Uuid
+  postalCode   String    @map("postal_code") @db.VarChar(20)
+  landmark     String?   @db.VarChar(150)
+  addressType  String    @default("HOME") @map("address_type") @db.VarChar(30)
+  isDefault    Boolean   @default(false) @map("is_default")
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt    DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  area  Area?  @relation(fields: [areaId], references: [id], onDelete: SetNull)
+  city  City?  @relation(fields: [cityId], references: [id], onDelete: SetNull)
+  state State? @relation(fields: [stateId], references: [id], onDelete: SetNull)
+
+  @@index([userId, isDefault])
+  @@index([postalCode])
+  @@index([deletedAt])
+  @@map("user_addresses")
+}
+
+model UserDevice {
+  id           String    @id @default(uuid()) @db.Uuid
+  userId       String    @map("user_id") @db.Uuid
+  deviceToken  String    @unique @map("device_token") @db.VarChar(500)
+  deviceType   String    @map("device_type") @db.VarChar(30)
+  deviceName   String?   @map("device_name") @db.VarChar(100)
+  osVersion    String?   @map("os_version") @db.VarChar(50)
+  appVersion   String?   @map("app_version") @db.VarChar(50)
+  isActive     Boolean   @default(true) @map("is_active")
+  lastActiveAt DateTime? @map("last_active_at") @db.Timestamptz(6)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isActive])
+  @@index([deviceType])
+  @@map("user_devices")
+}
+
+model RefreshToken {
+  id              String    @id @default(uuid()) @db.Uuid
+  userId          String    @map("user_id") @db.Uuid
+  tokenHash       String    @unique @map("token_hash") @db.VarChar(255)
+  deviceInfo      String?   @map("device_info") @db.VarChar(255)
+  ipAddress       String?   @map("ip_address") @db.VarChar(50)
+  isRevoked       Boolean   @default(false) @map("is_revoked")
+  replacedByToken String?   @map("replaced_by_token") @db.VarChar(255)
+  expiresAt       DateTime  @map("expires_at") @db.Timestamptz(6)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRevoked])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
+
+model OtpVerification {
+  id          String   @id @default(uuid()) @db.Uuid
+  identifier  String   @db.VarChar(255)
+  otpHash     String   @map("otp_hash") @db.VarChar(255)
+  purpose     String   @db.VarChar(50)
+  isUsed      Boolean  @default(false) @map("is_used")
+  attempts    Int      @default(0)
+  maxAttempts Int      @default(3) @map("max_attempts")
+  expiresAt   DateTime @map("expires_at") @db.Timestamptz(6)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([identifier, purpose, isUsed])
+  @@index([expiresAt])
+  @@map("otp_verifications")
+}
+
+model PasswordResetToken {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  tokenHash String   @unique @map("token_hash") @db.VarChar(255)
+  isUsed    Boolean  @default(false) @map("is_used")
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(6)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isUsed])
+  @@index([expiresAt])
+  @@map("password_reset_tokens")
+}
+
+// ------------------------------------------------------------------------------
+// LOCATIONS SUBSYSTEM
+// ------------------------------------------------------------------------------
+
+model Country {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @unique @db.VarChar(100)
+  code      String   @unique @db.VarChar(10)
+  phoneCode String   @map("phone_code") @db.VarChar(10)
+  currency  String   @default("INR") @db.VarChar(10)
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  states State[]
+
+  @@map("countries")
+}
+
+model State {
+  id        String   @id @default(uuid()) @db.Uuid
+  countryId String   @map("country_id") @db.Uuid
+  name      String   @db.VarChar(100)
+  code      String   @db.VarChar(20)
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  country   Country       @relation(fields: [countryId], references: [id], onDelete: Restrict)
+  cities    City[]
+  addresses UserAddress[]
+
+  @@unique([countryId, code])
+  @@index([countryId, isActive])
+  @@map("states")
+}
+
+model City {
+  id        String   @id @default(uuid()) @db.Uuid
+  stateId   String   @map("state_id") @db.Uuid
+  name      String   @db.VarChar(100)
+  slug      String   @unique @db.VarChar(120)
+  latitude  Decimal? @db.Decimal(10, 8)
+  longitude Decimal? @db.Decimal(11, 8)
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  state     State         @relation(fields: [stateId], references: [id], onDelete: Restrict)
+  areas     Area[]
+  turfs     Turf[]
+  addresses UserAddress[]
+
+  @@index([stateId, isActive])
+  @@index([name])
+  @@map("cities")
+}
+
+model Area {
+  id         String   @id @default(uuid()) @db.Uuid
+  cityId     String   @map("city_id") @db.Uuid
+  name       String   @db.VarChar(150)
+  slug       String   @db.VarChar(170)
+  postalCode String?  @map("postal_code") @db.VarChar(20)
+  latitude   Decimal? @db.Decimal(10, 8)
+  longitude  Decimal? @db.Decimal(11, 8)
+  isActive   Boolean  @default(true) @map("is_active")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  city      City          @relation(fields: [cityId], references: [id], onDelete: Restrict)
+  turfs     Turf[]
+  addresses UserAddress[]
+
+  @@unique([cityId, slug])
+  @@index([cityId, isActive])
+  @@index([postalCode])
+  @@map("areas")
+}
+
+// ------------------------------------------------------------------------------
+// SPORTS SUBSYSTEM
+// ------------------------------------------------------------------------------
+
+model Sport {
+  id          String    @id @default(uuid()) @db.Uuid
+  name        String    @unique @db.VarChar(100)
+  slug        String    @unique @db.VarChar(120)
+  description String?   @db.Text
+  iconUrl     String?   @map("icon_url") @db.VarChar(500)
+  minPlayers  Int       @default(2) @map("min_players")
+  maxPlayers  Int       @default(22) @map("max_players")
+  isActive    Boolean   @default(true) @map("is_active")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  turfSports   TurfSport[]
+  pricingRules PricingRule[]
+  slotHolds    SlotHold[]
+  bookings     Booking[]
+
+  @@index([isActive])
+  @@index([deletedAt])
+  @@map("sports")
+}
+
+// ------------------------------------------------------------------------------
+// FACILITIES SUBSYSTEM
+// ------------------------------------------------------------------------------
+
+model Facility {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @unique @db.VarChar(100)
+  slug        String   @unique @db.VarChar(120)
+  iconUrl     String?  @map("icon_url") @db.VarChar(500)
+  description String?  @db.VarChar(255)
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  turfFacilities TurfFacility[]
+
+  @@index([isActive])
+  @@map("facilities")
+}
+
+// ------------------------------------------------------------------------------
+// TURF & OWNERSHIP SUBSYSTEM
+// ------------------------------------------------------------------------------
+
+model TurfOwner {
+  id                String    @id @default(uuid()) @db.Uuid
+  userId            String    @unique @map("user_id") @db.Uuid
+  businessName      String    @map("business_name") @db.VarChar(255)
+  legalName         String?   @map("legal_name") @db.VarChar(255)
+  panNumber         String?   @map("pan_number") @db.VarChar(20)
+  gstNumber         String?   @map("gst_number") @db.VarChar(30)
+  bankAccountNumber String?   @map("bank_account_number") @db.VarChar(50)
+  bankIfsc          String?   @map("bank_ifsc") @db.VarChar(30)
+  bankName          String?   @map("bank_name") @db.VarChar(100)
+  isVerified        Boolean   @default(false) @map("is_verified")
+  isActive          Boolean   @default(true) @map("is_active")
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt         DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  user  User   @relation(fields: [userId], references: [id], onDelete: Restrict)
+  turfs Turf[]
+  commissionConfig       OwnerCommissionConfig?
+  commissionTransactions CommissionTransaction[]
+  settlements            Settlement[]
+
+  @@index([businessName])
+  @@index([isVerified, isActive])
+  @@index([deletedAt])
+  @@map("turf_owners")
+}
+
+model Turf {
+  id            String    @id @default(uuid()) @db.Uuid
+  ownerId       String    @map("owner_id") @db.Uuid
+  cityId        String    @map("city_id") @db.Uuid
+  areaId        String?   @map("area_id") @db.Uuid
+  name          String    @db.VarChar(255)
+  slug          String    @unique @db.VarChar(300)
+  description   String?   @db.Text
+  addressLine   String    @map("address_line") @db.Text
+  postalCode    String?   @map("postal_code") @db.VarChar(20)
+  latitude      Decimal?  @db.Decimal(10, 8)
+  longitude     Decimal?  @db.Decimal(11, 8)
+  contactPhone  String?   @map("contact_phone") @db.VarChar(30)
+  contactEmail  String?   @map("contact_email") @db.VarChar(255)
+  coverImageUrl      String?   @map("cover_image_url") @db.VarChar(500)
+  rules              String?   @db.Text
+  cancellationPolicy String?   @map("cancellation_policy") @db.Text
+  ratingAverage      Decimal   @default(0.00) @map("rating_average") @db.Decimal(3, 2)
+  totalReviews       Int       @default(0) @map("total_reviews")
+  isActive           Boolean   @default(true) @map("is_active")
+  isApproved         Boolean   @default(false) @map("is_approved")
+  isFeatured         Boolean   @default(false) @map("is_featured")
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt          DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  owner          TurfOwner          @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  city           City               @relation(fields: [cityId], references: [id], onDelete: Restrict)
+  area           Area?              @relation(fields: [areaId], references: [id], onDelete: SetNull)
+  images         TurfImage[]
+  videos         TurfVideo[]
+  turfSports     TurfSport[]
+  turfFacilities TurfFacility[]
+  operatingHours OperatingHour[]
+  pricingRules   PricingRule[]
+  blockedSlots   BlockedSlot[]
+  slotHolds      SlotHold[]
+  bookings       Booking[]
+  cancellationPolicyRule CancellationPolicy?
+  favorites              Favorite[]
+  reviews                Review[]
+
+  @@index([ownerId])
+  @@index([cityId, isActive, isApproved])
+  @@index([isFeatured, isActive, isApproved])
+  @@index([areaId])
+  @@index([deletedAt])
+  @@map("turfs")
+}
+
+model TurfImage {
+  id           String   @id @default(uuid()) @db.Uuid
+  turfId       String   @map("turf_id") @db.Uuid
+  imageUrl     String   @map("image_url") @db.VarChar(500)
+  caption      String?  @db.VarChar(255)
+  displayOrder Int      @default(0) @map("display_order")
+  isCover      Boolean  @default(false) @map("is_cover")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  turf Turf @relation(fields: [turfId], references: [id], onDelete: Cascade)
+
+  @@index([turfId, displayOrder])
+  @@map("turf_images")
+}
+
+model TurfVideo {
+  id           String   @id @default(uuid()) @db.Uuid
+  turfId       String   @map("turf_id") @db.Uuid
+  videoUrl     String   @map("video_url") @db.VarChar(500)
+  thumbnailUrl String?  @map("thumbnail_url") @db.VarChar(500)
+  title        String?  @db.VarChar(150)
+  displayOrder Int      @default(0) @map("display_order")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  turf Turf @relation(fields: [turfId], references: [id], onDelete: Cascade)
+
+  @@index([turfId, displayOrder])
+  @@map("turf_videos")
+}
+
+model TurfSport {
+  id        String   @id @default(uuid()) @db.Uuid
+  turfId    String   @map("turf_id") @db.Uuid
+  sportId   String   @map("sport_id") @db.Uuid
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  turf  Turf  @relation(fields: [turfId], references: [id], onDelete: Cascade)
+  sport Sport @relation(fields: [sportId], references: [id], onDelete: Restrict)
+
+  @@unique([turfId, sportId])
+  @@index([sportId, isActive])
+  @@map("turf_sports")
+}
+
+model TurfFacility {
+  id         String   @id @default(uuid()) @db.Uuid
+  turfId     String   @map("turf_id") @db.Uuid
+  facilityId String   @map("facility_id") @db.Uuid
+  isActive   Boolean  @default(true) @map("is_active")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  turf     Turf     @relation(fields: [turfId], references: [id], onDelete: Cascade)
+  facility Facility @relation(fields: [facilityId], references: [id], onDelete: Restrict)
+
+  @@unique([turfId, facilityId])
+  @@index([facilityId, isActive])
+  @@map("turf_facilities")
+}
+
+// ------------------------------------------------------------------------------
+// TURF CONFIGURATION SUBSYSTEM
+// ------------------------------------------------------------------------------
+
+model OperatingHour {
+  id        String   @id @default(uuid()) @db.Uuid
+  turfId    String   @map("turf_id") @db.Uuid
+  dayOfWeek Int      @map("day_of_week")
+  openTime  String   @map("open_time") @db.VarChar(5)
+  closeTime String   @map("close_time") @db.VarChar(5)
+  isClosed  Boolean  @default(false) @map("is_closed")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  turf Turf @relation(fields: [turfId], references: [id], onDelete: Cascade)
+
+  @@unique([turfId, dayOfWeek])
+  @@index([turfId])
+  @@map("operating_hours")
+}
+
+model PricingRule {
+  id          String   @id @default(uuid()) @db.Uuid
+  turfId      String   @map("turf_id") @db.Uuid
+  sportId     String?  @map("sport_id") @db.Uuid
+  ruleName    String   @map("rule_name") @db.VarChar(100)
+  dayType     String   @default("ALL") @map("day_type") @db.VarChar(30)
+  dayOfWeek   Int?     @map("day_of_week")
+  startTime   String   @map("start_time") @db.VarChar(5)
+  endTime     String   @map("end_time") @db.VarChar(5)
+  hourlyPrice Decimal  @map("hourly_price") @db.Decimal(10, 2)
+  specificDate DateTime? @map("specific_date") @db.Date
+  isActive     Boolean   @default(true) @map("is_active")
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  turf  Turf   @relation(fields: [turfId], references: [id], onDelete: Cascade)
+  sport Sport? @relation(fields: [sportId], references: [id], onDelete: SetNull)
+
+  @@index([turfId, isActive])
+  @@index([turfId, specificDate])
+  @@index([sportId])
+  @@map("pricing_rules")
+}
+
+model BlockedSlot {
+  id              String   @id @default(uuid()) @db.Uuid
+  turfId          String   @map("turf_id") @db.Uuid
+  blockDate       DateTime @map("block_date") @db.Date
+  startTime       String   @map("start_time") @db.VarChar(5)
+  endTime         String   @map("end_time") @db.VarChar(5)
+  reason          String?  @db.VarChar(255)
+  blockedByUserId String?  @map("blocked_by_user_id") @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  turf          Turf  @relation(fields: [turfId], references: [id], onDelete: Cascade)
+  blockedByUser User? @relation(fields: [blockedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([turfId, blockDate])
+  @@index([blockDate])
+  @@map("blocked_slots")
+}
+
+// ------------------------------------------------------------------------------
+// AUDIT SUBSYSTEM
+// ------------------------------------------------------------------------------
+
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String?  @map("user_id") @db.Uuid
+  action     String   @db.VarChar(100)
+  entityType String   @map("entity_type") @db.VarChar(100)
+  entityId   String?  @map("entity_id") @db.VarChar(100)
+  oldValues  Json?    @map("old_values")
+  newValues  Json?    @map("new_values")
+  ipAddress  String?  @map("ip_address") @db.VarChar(50)
+  userAgent  String?  @map("user_agent") @db.Text
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId])
+  @@index([userId, createdAt])
+  @@map("audit_logs")
+}
+
+// ------------------------------------------------------------------------------
+// BOOKINGS & CONCURRENCY SUBSYSTEM
+// ------------------------------------------------------------------------------
+
+enum BookingStatus {
+  PENDING
+  PAYMENT_PENDING
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+  NO_SHOW
+  EXPIRED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum HoldStatus {
+  ACTIVE
+  EXPIRED
+  RELEASED
+  CONVERTED
+}
+
+model SlotHold {
+  id             String     @id @default(uuid()) @db.Uuid
+  holdCode       String     @unique @map("hold_code") @db.VarChar(32)
+  userId         String     @map("user_id") @db.Uuid
+  turfId         String     @map("turf_id") @db.Uuid
+  sportId        String?    @map("sport_id") @db.Uuid
+  holdDate       DateTime   @map("hold_date") @db.Date
+  startTime      String     @map("start_time") @db.VarChar(5)
+  endTime        String     @map("end_time") @db.VarChar(5)
+  expiresAt      DateTime   @map("expires_at") @db.Timestamptz(6)
+  status         HoldStatus @default(ACTIVE)
+  totalPrice     Decimal    @map("total_price") @db.Decimal(10, 2)
+  idempotencyKey String?    @unique @map("idempotency_key") @db.VarChar(255)
+  activeHoldKey  String?    @unique @map("active_hold_key") @db.VarChar(120)
+  createdAt      DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Restrict)
+  turf     Turf      @relation(fields: [turfId], references: [id], onDelete: Restrict)
+  sport    Sport?    @relation(fields: [sportId], references: [id], onDelete: SetNull)
+  bookings Booking[]
+  payments Payment[]
+
+  @@index([turfId, holdDate, startTime])
+  @@index([userId, status])
+  @@index([expiresAt, status])
+  @@map("slot_holds")
+}
+
+model Booking {
+  id                 String        @id @default(uuid()) @db.Uuid
+  bookingNumber      String        @unique @map("booking_number") @db.VarChar(32)
+  userId             String        @map("user_id") @db.Uuid
+  turfId             String        @map("turf_id") @db.Uuid
+  sportId            String?       @map("sport_id") @db.Uuid
+  slotHoldId         String?       @map("slot_hold_id") @db.Uuid
+  bookingDate        DateTime      @map("booking_date") @db.Date
+  startTime          String        @map("start_time") @db.VarChar(5)
+  endTime            String        @map("end_time") @db.VarChar(5)
+  durationMinutes    Int           @default(60) @map("duration_minutes")
+  status             BookingStatus @default(CONFIRMED)
+  activeSlotKey      String?       @unique @map("active_slot_key") @db.VarChar(120)
+  idempotencyKey     String?       @unique @map("idempotency_key") @db.VarChar(255)
+  basePrice          Decimal       @map("base_price") @db.Decimal(10, 2)
+  taxAmount          Decimal       @default(0.00) @map("tax_amount") @db.Decimal(10, 2)
+  discountAmount     Decimal       @default(0.00) @map("discount_amount") @db.Decimal(10, 2)
+  totalPrice         Decimal       @map("total_price") @db.Decimal(10, 2)
+  cancellationReason String?       @map("cancellation_reason") @db.Text
+  cancelledAt        DateTime?     @map("cancelled_at") @db.Timestamptz(6)
+  rescheduledFromId  String?       @map("rescheduled_from_id") @db.Uuid
+  checkedInAt        DateTime?     @map("checked_in_at") @db.Timestamptz(6)
+  checkedInByUserId  String?       @map("checked_in_by_user_id") @db.Uuid
+  checkedOutAt       DateTime?     @map("checked_out_at") @db.Timestamptz(6)
+  checkedOutByUserId String?       @map("checked_out_by_user_id") @db.Uuid
+  createdAt          DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt          DateTime?     @map("deleted_at") @db.Timestamptz(6)
+
+  user            User                   @relation(fields: [userId], references: [id], onDelete: Restrict)
+  turf            Turf                   @relation(fields: [turfId], references: [id], onDelete: Restrict)
+  sport           Sport?                 @relation(fields: [sportId], references: [id], onDelete: SetNull)
+  slotHold        SlotHold?              @relation(fields: [slotHoldId], references: [id], onDelete: SetNull)
+  rescheduledFrom Booking?               @relation("BookingReschedule", fields: [rescheduledFromId], references: [id], onDelete: SetNull)
+  rescheduledTo   Booking[]              @relation("BookingReschedule")
+  statusHistory       BookingStatusHistory[]
+  payments            Payment[]
+  refunds             Refund[]
+  reviews             Review[]
+  couponUsages        CouponUsage[]
+  checkInAudits       BookingCheckInAudit[]
+  commissionTransaction CommissionTransaction?
+
+  @@index([turfId, bookingDate, startTime])
+  @@index([userId, status])
+  @@index([status, bookingDate])
+  @@index([bookingNumber])
+  @@map("bookings")
+}
+
+model BookingStatusHistory {
+  id              String         @id @default(uuid()) @db.Uuid
+  bookingId       String         @map("booking_id") @db.Uuid
+  fromStatus      BookingStatus? @map("from_status")
+  toStatus        BookingStatus  @map("to_status")
+  reason          String?        @db.VarChar(255)
+  changedByUserId String?        @map("changed_by_user_id") @db.Uuid
+  createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  booking       Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  changedByUser User?   @relation(fields: [changedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([bookingId, createdAt])
+  @@map("booking_status_history")
+}
+
+// ------------------------------------------------------------------------------
+// PAYMENTS & WEBHOOKS SUBSYSTEM
+// ------------------------------------------------------------------------------
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  SUCCESS
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+  EXPIRED
+}
+
+model Payment {
+  id             String         @id @default(uuid()) @db.Uuid
+  paymentNumber  String         @unique @map("payment_number") @db.VarChar(32)
+  bookingId      String?        @map("booking_id") @db.Uuid
+  slotHoldId     String?        @map("slot_hold_id") @db.Uuid
+  userId         String         @map("user_id") @db.Uuid
+  provider       String         @db.VarChar(50)
+  orderId        String         @unique @map("order_id") @db.VarChar(255)
+  transactionId  String?        @map("transaction_id") @db.VarChar(255)
+  signature      String?        @db.VarChar(500)
+  amount         Decimal        @db.Decimal(10, 2)
+  currency       String         @default("INR") @db.VarChar(10)
+  status         PaymentStatus  @default(PENDING)
+  failureReason  String?        @map("failure_reason") @db.Text
+  idempotencyKey String?        @unique @map("idempotency_key") @db.VarChar(255)
+  metadata       Json?
+  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user          User                   @relation(fields: [userId], references: [id], onDelete: Restrict)
+  booking       Booking?               @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+  slotHold      SlotHold?              @relation(fields: [slotHoldId], references: [id], onDelete: SetNull)
+  statusHistory PaymentStatusHistory[]
+  refunds       Refund[]
+
+  @@index([userId, status])
+  @@index([orderId])
+  @@index([transactionId])
+  @@index([bookingId])
+  @@index([slotHoldId])
+  @@map("payments")
+}
+
+model PaymentStatusHistory {
+  id        String         @id @default(uuid()) @db.Uuid
+  paymentId String         @map("payment_id") @db.Uuid
+  fromStatus PaymentStatus? @map("from_status")
+  toStatus  PaymentStatus  @map("to_status")
+  reason    String?        @db.VarChar(255)
+  createdAt DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  @@index([paymentId, createdAt])
+  @@map("payment_status_history")
+}
+
+model WebhookEvent {
+  id        String   @id @default(uuid()) @db.Uuid
+  eventId   String   @unique @map("event_id") @db.VarChar(255)
+  provider  String   @db.VarChar(50)
+  eventType String   @map("event_type") @db.VarChar(100)
+  payload   Json
+  status    String   @default("PROCESSED") @db.VarChar(30)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([provider, eventType])
+  @@map("webhook_events")
+}
+
+// ------------------------------------------------------------------------------
+// CANCELLATION & REFUNDS SUBSYSTEM
+// ------------------------------------------------------------------------------
+
+enum RefundStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+enum RefundType {
+  FULL
+  PARTIAL
+  NONE
+}
+
+model CancellationPolicy {
+  id                    String   @id @default(uuid()) @db.Uuid
+  turfId                String   @unique @map("turf_id") @db.Uuid
+  freeCancellationHours Int      @default(24) @map("free_cancellation_hours")
+  fixedCancellationFee  Decimal  @default(0.00) @map("fixed_cancellation_fee") @db.Decimal(10, 2)
+  rules                 Json     @default("[]")
+  description           String?  @db.Text
+  createdAt             DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  turf Turf @relation(fields: [turfId], references: [id], onDelete: Cascade)
+
+  @@map("cancellation_policies")
+}
+
+model Refund {
+  id               String       @id @default(uuid()) @db.Uuid
+  refundNumber     String       @unique @map("refund_number") @db.VarChar(32)
+  bookingId        String       @map("booking_id") @db.Uuid
+  paymentId        String?      @map("payment_id") @db.Uuid
+  userId           String       @map("user_id") @db.Uuid
+  amount           Decimal      @db.Decimal(10, 2)
+  cancellationFee  Decimal      @default(0.00) @map("cancellation_fee") @db.Decimal(10, 2)
+  refundPercentage Decimal?     @map("refund_percentage") @db.Decimal(5, 2)
+  refundType       RefundType   @default(FULL) @map("refund_type")
+  status           RefundStatus @default(PENDING)
+  gatewayRefundId  String?      @unique @map("gateway_refund_id") @db.VarChar(255)
+  reason           String?      @db.Text
+  failureReason    String?      @map("failure_reason") @db.Text
+  processedAt      DateTime?    @map("processed_at") @db.Timestamptz(6)
+  createdAt        DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  booking Booking  @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+  payment Payment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  user    User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([bookingId])
+  @@index([paymentId])
+  @@index([userId, status])
+  @@index([refundNumber])
+  @@map("refunds")
+}
+
+// ------------------------------------------------------------------------------
+// NOTIFICATIONS SUBSYSTEM
+// ------------------------------------------------------------------------------
+
+enum NotificationType {
+  BOOKING_CONFIRMED
+  PAYMENT_SUCCESSFUL
+  BOOKING_CANCELLED
+  BOOKING_REMINDER
+  REFUND_INITIATED
+  REFUND_COMPLETED
+  OWNER_BOOKING_NOTIFICATION
+  SYSTEM
+}
+
+model Notification {
+  id        String           @id @default(uuid()) @db.Uuid
+  userId    String           @map("user_id") @db.Uuid
+  type      NotificationType
+  title     String           @db.VarChar(255)
+  body      String           @db.Text
+  data      Json?
+  isRead    Boolean          @default(false) @map("is_read")
+  readAt    DateTime?        @map("read_at") @db.Timestamptz(6)
+  createdAt DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+  @@index([userId, createdAt])
+  @@map("notifications")
+}
+
+// ------------------------------------------------------------------------------
+// FAVORITES SUBSYSTEM
+// ------------------------------------------------------------------------------
+
+model Favorite {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  turfId    String   @map("turf_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  turf Turf @relation(fields: [turfId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, turfId])
+  @@index([userId])
+  @@index([turfId])
+  @@map("favorites")
+}
+
+// ------------------------------------------------------------------------------
+// REVIEWS SUBSYSTEM
+// ------------------------------------------------------------------------------
+
+model Review {
+  id             String    @id @default(uuid()) @db.Uuid
+  userId         String    @map("user_id") @db.Uuid
+  turfId         String    @map("turf_id") @db.Uuid
+  bookingId      String?   @map("booking_id") @db.Uuid
+  rating         Int       @default(5)
+  comment        String?   @db.Text
+  ownerReply     String?   @map("owner_reply") @db.Text
+  ownerRepliedAt DateTime? @map("owner_replied_at") @db.Timestamptz(6)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  turf    Turf     @relation(fields: [turfId], references: [id], onDelete: Cascade)
+  booking Booking? @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+
+  @@index([turfId])
+  @@index([userId])
+  @@index([bookingId])
+  @@map("reviews")
+}
+
+// ------------------------------------------------------------------------------
+// COUPONS SUBSYSTEM
+// ------------------------------------------------------------------------------
+
+enum DiscountType {
+  PERCENTAGE
+  FLAT
+}
+
+model Coupon {
+  id                 String       @id @default(uuid()) @db.Uuid
+  code               String       @unique @db.VarChar(50)
+  description        String?      @db.VarChar(255)
+  discountType       DiscountType @default(PERCENTAGE) @map("discount_type")
+  discountValue      Decimal      @map("discount_value") @db.Decimal(10, 2)
+  minOrderAmount     Decimal      @default(0.00) @map("min_order_amount") @db.Decimal(10, 2)
+  maxDiscountAmount  Decimal?     @map("max_discount_amount") @db.Decimal(10, 2)
+  startDate          DateTime     @default(now()) @map("start_date") @db.Timestamptz(6)
+  endDate            DateTime     @map("end_date") @db.Timestamptz(6)
+  totalUsageLimit    Int?         @map("total_usage_limit")
+  currentUsageCount  Int          @default(0) @map("current_usage_count")
+  perUserLimit       Int          @default(1) @map("per_user_limit")
+  turfIds            String[]     @default([]) @map("turf_ids")
+  sportTypes         String[]     @default([]) @map("sport_types")
+  isFirstBookingOnly Boolean      @default(false) @map("is_first_booking_only")
+  isActive           Boolean      @default(true) @map("is_active")
+  createdAt          DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  usages CouponUsage[]
+
+  @@index([code, isActive])
+  @@index([endDate, isActive])
+  @@map("coupons")
+}
+
+model CouponUsage {
+  id             String   @id @default(uuid()) @db.Uuid
+  couponId       String   @map("coupon_id") @db.Uuid
+  userId         String   @map("user_id") @db.Uuid
+  bookingId      String?  @map("booking_id") @db.Uuid
+  discountAmount Decimal  @map("discount_amount") @db.Decimal(10, 2)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  coupon  Coupon   @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  booking Booking? @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+
+  @@index([couponId, userId])
+  @@index([userId])
+  @@index([bookingId])
+  @@map("coupon_usages")
+}
+
+// ------------------------------------------------------------------------------
+// COMMISSION & SETTLEMENTS SUBSYSTEM
+// ------------------------------------------------------------------------------
+
+enum SettlementStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  ON_HOLD
+}
+
+model OwnerCommissionConfig {
+  id                 String    @id @default(uuid()) @db.Uuid
+  turfOwnerId        String    @unique @map("turf_owner_id") @db.Uuid
+  commissionRate     Decimal   @default(10.00) @map("commission_rate") @db.Decimal(5, 2) // percentage
+  isActive           Boolean   @default(true) @map("is_active")
+  effectiveFrom      DateTime  @default(now()) @map("effective_from") @db.Timestamptz(6)
+  notes              String?   @db.Text
+  setByAdminId       String?   @map("set_by_admin_id") @db.Uuid
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  owner      TurfOwner     @relation(fields: [turfOwnerId], references: [id], onDelete: Cascade)
+  setByAdmin User?         @relation("CommissionSetBy", fields: [setByAdminId], references: [id], onDelete: SetNull)
+  transactions CommissionTransaction[]
+
+  @@index([turfOwnerId, isActive])
+  @@map("owner_commission_configs")
+}
+
+model CommissionTransaction {
+  id                   String   @id @default(uuid()) @db.Uuid
+  bookingId            String   @unique @map("booking_id") @db.Uuid
+  turfOwnerId          String   @map("turf_owner_id") @db.Uuid
+  commissionConfigId   String?  @map("commission_config_id") @db.Uuid
+  grossAmount          Decimal  @map("gross_amount") @db.Decimal(10, 2)
+  commissionRate       Decimal  @map("commission_rate") @db.Decimal(5, 2)
+  commissionAmount     Decimal  @map("commission_amount") @db.Decimal(10, 2)
+  refundAmount         Decimal  @default(0.00) @map("refund_amount") @db.Decimal(10, 2)
+  adjustmentAmount     Decimal  @default(0.00) @map("adjustment_amount") @db.Decimal(10, 2)
+  netOwnerEarning      Decimal  @map("net_owner_earning") @db.Decimal(10, 2)
+  settlementId         String?  @map("settlement_id") @db.Uuid
+  isSettled            Boolean  @default(false) @map("is_settled")
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  booking          Booking               @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+  owner            TurfOwner             @relation(fields: [turfOwnerId], references: [id], onDelete: Restrict)
+  commissionConfig OwnerCommissionConfig? @relation(fields: [commissionConfigId], references: [id], onDelete: SetNull)
+  settlement       Settlement?           @relation(fields: [settlementId], references: [id], onDelete: SetNull)
+
+  @@index([turfOwnerId, isSettled])
+  @@index([settlementId])
+  @@index([bookingId])
+  @@map("commission_transactions")
+}
+
+model Settlement {
+  id               String           @id @default(uuid()) @db.Uuid
+  settlementNumber String           @unique @map("settlement_number") @db.VarChar(32)
+  turfOwnerId      String           @map("turf_owner_id") @db.Uuid
+  periodStart      DateTime         @map("period_start") @db.Date
+  periodEnd        DateTime         @map("period_end") @db.Date
+  grossAmount      Decimal          @map("gross_amount") @db.Decimal(10, 2)
+  commissionAmount Decimal          @map("commission_amount") @db.Decimal(10, 2)
+  refundAmount     Decimal          @default(0.00) @map("refund_amount") @db.Decimal(10, 2)
+  adjustmentAmount Decimal          @default(0.00) @map("adjustment_amount") @db.Decimal(10, 2)
+  netPayoutAmount  Decimal          @map("net_payout_amount") @db.Decimal(10, 2)
+  transactionCount Int              @default(0) @map("transaction_count")
+  status           SettlementStatus @default(PENDING)
+  processedAt      DateTime?        @map("processed_at") @db.Timestamptz(6)
+  processedByAdminId String?        @map("processed_by_admin_id") @db.Uuid
+  notes            String?          @db.Text
+  failureReason    String?          @map("failure_reason") @db.Text
+  createdAt        DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  owner              TurfOwner             @relation(fields: [turfOwnerId], references: [id], onDelete: Restrict)
+  processedByAdmin   User?                 @relation("SettlementProcessedBy", fields: [processedByAdminId], references: [id], onDelete: SetNull)
+  transactions       CommissionTransaction[]
+
+  @@index([turfOwnerId, status])
+  @@index([periodStart, periodEnd])
+  @@index([status])
+  @@map("settlements")
+}
+
+// ------------------------------------------------------------------------------
+// BOOKING CHECK-IN AUDIT SUBSYSTEM
+// ------------------------------------------------------------------------------
+
+model BookingCheckInAudit {
+  id                String   @id @default(uuid()) @db.Uuid
+  bookingId         String   @map("booking_id") @db.Uuid
+  turfId            String   @map("turf_id") @db.Uuid
+  actionType        String   @map("action_type") @db.VarChar(20) // 'CHECK_IN' | 'CHECK_OUT' | 'SCAN'
+  performedByUserId String?  @map("performed_by_user_id") @db.Uuid
+  performedAt       DateTime @default(now()) @map("performed_at") @db.Timestamptz(6)
+  notes             String?  @db.Text
+  metadata          Json?
+
+  booking     Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  performedBy User?   @relation(fields: [performedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([bookingId])
+  @@index([turfId, performedAt])
+  @@map("booking_check_in_audits")
+}
+
+
+
