@@ -60,7 +60,12 @@ export class BookingsCheckInController {
     @CurrentUser('roles') userRoles: string[],
     @Body() dto: CheckInNotesDto,
   ) {
-    return this.checkInService.checkIn(id, userId, userRoles, dto.notes);
+    return this.checkInService.checkIn(id, userId, userRoles, dto.notes, {
+      latitude: dto.latitude,
+      longitude: dto.longitude,
+      location: dto.location,
+      accuracy: dto.accuracy,
+    });
   }
 
   @Post(':id/check-out')
@@ -81,7 +86,12 @@ export class BookingsCheckInController {
     @CurrentUser('roles') userRoles: string[],
     @Body() dto: CheckInNotesDto,
   ) {
-    return this.checkInService.checkOut(id, userId, userRoles, dto.notes);
+    return this.checkInService.checkOut(id, userId, userRoles, dto.notes, {
+      latitude: dto.latitude,
+      longitude: dto.longitude,
+      location: dto.location,
+      accuracy: dto.accuracy,
+    });
   }
 
   @Get(':id/check-in-status')

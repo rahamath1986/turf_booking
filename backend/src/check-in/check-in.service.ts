@@ -231,6 +231,12 @@ export class CheckInService {
     staffRoles: string[] = [],
     qrToken: string,
     gateTurfId?: string,
+    locationData?: {
+      latitude?: number;
+      longitude?: number;
+      location?: string;
+      accuracy?: number;
+    },
   ) {
     // 1. Verify token cryptographic integrity and expiry
     const payload = this.verifySignedToken(qrToken);
@@ -284,6 +290,34 @@ export class CheckInService {
       booking.endTime,
     );
 
+    const userLocation =
+      locationData &&
+      (locationData.latitude !== undefined ||
+        locationData.longitude !== undefined ||
+        locationData.location)
+        ? {
+            latitude: locationData.latitude ?? null,
+            longitude: locationData.longitude ?? null,
+            location: locationData.location ?? null,
+            accuracy: locationData.accuracy ?? null,
+          }
+        : null;
+
+    let distanceFromTurfMeters: number | null = null;
+    if (
+      userLocation?.latitude != null &&
+      userLocation?.longitude != null &&
+      booking.turf.latitude != null &&
+      booking.turf.longitude != null
+    ) {
+      distanceFromTurfMeters = this.calculateDistanceMeters(
+        Number(userLocation.latitude),
+        Number(userLocation.longitude),
+        Number(booking.turf.latitude),
+        Number(booking.turf.longitude),
+      );
+    }
+
     // 5. Audit scan action
     await this.prisma.bookingCheckInAudit.create({
       data: {
@@ -295,6 +329,8 @@ export class CheckInService {
         metadata: {
           scannedAt: new Date().toISOString(),
           timeStatus: dateValidation.status,
+          userLocation,
+          distanceFromTurfMeters,
         },
       },
     });
@@ -311,6 +347,8 @@ export class CheckInService {
       valid: true,
       message: dateValidation.message,
       timeStatus: dateValidation.status,
+      userLocation,
+      distanceFromTurfMeters,
       booking: {
         id: booking.id,
         bookingNumber: booking.bookingNumber,
@@ -350,6 +388,12 @@ export class CheckInService {
     performedByUserId: string,
     userRoles: string[] = [],
     notes?: string,
+    locationData?: {
+      latitude?: number;
+      longitude?: number;
+      location?: string;
+      accuracy?: number;
+    },
   ) {
     const booking = await this.prisma.booking.findUnique({
       where: { id: bookingId },
@@ -409,6 +453,34 @@ export class CheckInService {
       throw new BadRequestException(dateValidation.message);
     }
 
+    const userLocation =
+      locationData &&
+      (locationData.latitude !== undefined ||
+        locationData.longitude !== undefined ||
+        locationData.location)
+        ? {
+            latitude: locationData.latitude ?? null,
+            longitude: locationData.longitude ?? null,
+            location: locationData.location ?? null,
+            accuracy: locationData.accuracy ?? null,
+          }
+        : null;
+
+    let distanceFromTurfMeters: number | null = null;
+    if (
+      userLocation?.latitude != null &&
+      userLocation?.longitude != null &&
+      booking.turf.latitude != null &&
+      booking.turf.longitude != null
+    ) {
+      distanceFromTurfMeters = this.calculateDistanceMeters(
+        Number(userLocation.latitude),
+        Number(userLocation.longitude),
+        Number(booking.turf.latitude),
+        Number(booking.turf.longitude),
+      );
+    }
+
     // 4. Perform atomic Check-in transaction
     const now = new Date();
     const updated = await this.prisma.$transaction(async (tx) => {
@@ -431,6 +503,8 @@ export class CheckInService {
           metadata: {
             checkedInAt: now.toISOString(),
             performedByRole: userRoles[0] || 'CUSTOMER',
+            userLocation,
+            distanceFromTurfMeters,
           },
         },
       });
@@ -455,6 +529,9 @@ export class CheckInService {
 
     return {
       message: 'Check-in successful',
+      userLocation,
+      distanceFromTurfMeters,
+      timestamp: now.toISOString(),
       booking: {
         id: updated.id,
         bookingNumber: updated.bookingNumber,
@@ -474,6 +551,12 @@ export class CheckInService {
     performedByUserId: string,
     userRoles: string[] = [],
     notes?: string,
+    locationData?: {
+      latitude?: number;
+      longitude?: number;
+      location?: string;
+      accuracy?: number;
+    },
   ) {
     const booking = await this.prisma.booking.findUnique({
       where: { id: bookingId },
@@ -513,6 +596,34 @@ export class CheckInService {
       );
     }
 
+    const userLocation =
+      locationData &&
+      (locationData.latitude !== undefined ||
+        locationData.longitude !== undefined ||
+        locationData.location)
+        ? {
+            latitude: locationData.latitude ?? null,
+            longitude: locationData.longitude ?? null,
+            location: locationData.location ?? null,
+            accuracy: locationData.accuracy ?? null,
+          }
+        : null;
+
+    let distanceFromTurfMeters: number | null = null;
+    if (
+      userLocation?.latitude != null &&
+      userLocation?.longitude != null &&
+      booking.turf.latitude != null &&
+      booking.turf.longitude != null
+    ) {
+      distanceFromTurfMeters = this.calculateDistanceMeters(
+        Number(userLocation.latitude),
+        Number(userLocation.longitude),
+        Number(booking.turf.latitude),
+        Number(booking.turf.longitude),
+      );
+    }
+
     // 3. Perform atomic Check-out transaction
     const now = new Date();
     const updated = await this.prisma.$transaction(async (tx) => {
@@ -534,6 +645,8 @@ export class CheckInService {
           notes: notes || 'Customer checked out from venue',
           metadata: {
             checkedOutAt: now.toISOString(),
+            userLocation,
+            distanceFromTurfMeters,
           },
         },
       });
@@ -557,6 +670,9 @@ export class CheckInService {
 
     return {
       message: 'Check-out completed successfully',
+      userLocation,
+      distanceFromTurfMeters,
+      timestamp: now.toISOString(),
       booking: {
         id: updated.id,
         bookingNumber: updated.bookingNumber,
@@ -608,6 +724,13 @@ export class CheckInService {
     const isCheckedIn = Boolean(booking.checkedInAt);
     const isCheckedOut = Boolean(booking.checkedOutAt);
 
+    const checkInAudit = booking.checkInAudits.find(
+      (a) => a.actionType === 'CHECK_IN',
+    );
+    const checkInMeta: any = checkInAudit?.metadata || {};
+    const checkInLocation = checkInMeta.userLocation || null;
+    const distanceFromTurfMeters = checkInMeta.distanceFromTurfMeters ?? null;
+
     return {
       bookingId: booking.id,
       bookingNumber: booking.bookingNumber,
@@ -616,18 +739,25 @@ export class CheckInService {
       isCheckedIn,
       checkedInAt: booking.checkedInAt,
       checkedInByUserId: booking.checkedInByUserId,
+      checkInLocation,
+      distanceFromTurfMeters,
       isCheckedOut,
       checkedOutAt: booking.checkedOutAt,
       checkedOutByUserId: booking.checkedOutByUserId,
-      audits: booking.checkInAudits.map((a) => ({
-        id: a.id,
-        actionType: a.actionType,
-        performedAt: a.performedAt,
-        performedBy: a.performedBy
-          ? { id: a.performedBy.id, fullName: a.performedBy.fullName }
-          : null,
-        notes: a.notes,
-      })),
+      audits: booking.checkInAudits.map((a) => {
+        const meta: any = a.metadata || {};
+        return {
+          id: a.id,
+          actionType: a.actionType,
+          performedAt: a.performedAt,
+          performedBy: a.performedBy
+            ? { id: a.performedBy.id, fullName: a.performedBy.fullName }
+            : null,
+          notes: a.notes,
+          userLocation: meta.userLocation || null,
+          distanceFromTurfMeters: meta.distanceFromTurfMeters ?? null,
+        };
+      }),
     };
   }
 
@@ -686,5 +816,28 @@ export class CheckInService {
       status: 'ON_TIME',
       message: 'Checked in on schedule. Have a great match!',
     };
+  }
+
+  /**
+   * Calculates geodesic distance between two latitude/longitude points in meters using Haversine formula
+   */
+  calculateDistanceMeters(
+    lat1: number,
+    lon1: number,
+    lat2: number,
+    lon2: number,
+  ): number {
+    const toRad = (value: number) => (value * Math.PI) / 180;
+    const R = 6371000; // Earth radius in meters
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(toRad(lat1)) *
+        Math.cos(toRad(lat2)) *
+        Math.sin(dLon / 2) *
+        Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return Math.round(R * c * 10) / 10;
   }
 }

@@ -47,6 +47,12 @@ export class StaffBookingsController {
       staffRoles,
       dto.qrToken,
       dto.turfId,
+      {
+        latitude: dto.latitude,
+        longitude: dto.longitude,
+        location: dto.location,
+        accuracy: dto.accuracy,
+      },
     );
   }
 }

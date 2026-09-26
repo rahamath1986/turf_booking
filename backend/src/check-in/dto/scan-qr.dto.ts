@@ -19,4 +19,33 @@ export class ScanQrDto {
   @IsOptional()
   @IsUUID()
   turfId?: string;
+
+  @ApiPropertyOptional({
+    example: 12.9716,
+    description: 'Current GPS latitude coordinate of staff scanner',
+  })
+  @IsOptional()
+  latitude?: number;
+
+  @ApiPropertyOptional({
+    example: 77.5946,
+    description: 'Current GPS longitude coordinate of staff scanner',
+  })
+  @IsOptional()
+  longitude?: number;
+
+  @ApiPropertyOptional({
+    example: 'Gate 2 Entrance, Koramangala',
+    description: 'Human-readable location or gate name',
+  })
+  @IsOptional()
+  @IsString()
+  location?: string;
+
+  @ApiPropertyOptional({
+    example: 15.5,
+    description: 'GPS accuracy radius in meters',
+  })
+  @IsOptional()
+  accuracy?: number;
 }

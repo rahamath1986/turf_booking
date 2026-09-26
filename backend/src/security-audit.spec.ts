@@ -123,21 +123,8 @@ describe('Security: Authentication', () => {
   let prisma: ReturnType<typeof mockPrisma>;
   let jwtService: JwtService;
 
-  beforeEach(async () => {
+  beforeEach(() => {
     prisma = mockPrisma();
-    const module: TestingModule = await Test.createTestingModule({
-      providers: [
-        AuthService,
-        { provide: 'PrismaService', useValue: prisma },
-        JwtService,
-        { provide: ConfigService, useValue: mockConfigService() },
-      ],
-    })
-      .overrideProvider('PrismaService')
-      .useValue(prisma)
-      .compile();
-
-    // Manual instantiation for tighter control
     jwtService = new JwtService({});
     authService = new AuthService(prisma as any, jwtService, mockConfigService() as any);
   });

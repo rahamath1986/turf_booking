@@ -11,4 +11,35 @@ export class CheckInNotesDto {
   @IsString()
   @MaxLength(500)
   notes?: string;
+
+  @ApiPropertyOptional({
+    example: 12.9716,
+    description: 'Current GPS latitude coordinate of user at check-in/out',
+  })
+  @IsOptional()
+  latitude?: number;
+
+  @ApiPropertyOptional({
+    example: 77.5946,
+    description: 'Current GPS longitude coordinate of user at check-in/out',
+  })
+  @IsOptional()
+  longitude?: number;
+
+  @ApiPropertyOptional({
+    example: 'Koramangala, Bengaluru',
+    description: 'Human-readable location or gate name at check-in/out',
+  })
+  @IsOptional()
+  @IsString()
+  location?: string;
+
+  @ApiPropertyOptional({
+    example: 15.5,
+    description: 'GPS accuracy radius in meters',
+  })
+  @IsOptional()
+  accuracy?: number;
 }
+
+export { CheckInNotesDto as CheckInDto };

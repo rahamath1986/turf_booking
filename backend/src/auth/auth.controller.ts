@@ -131,8 +131,10 @@ export class AuthController {
   async logout(@Body() dto: LogoutDto, @Req() req: Request) {
     const authHeader = req.headers.authorization;
     let userId: string | undefined;
+    let bearerToken: string | undefined;
 
     if (authHeader && authHeader.startsWith('Bearer ')) {
+      bearerToken = authHeader.substring(7);
       // Optional authenticated logout
       try {
         const payload: any = req.user;
@@ -142,7 +144,23 @@ export class AuthController {
       }
     }
 
-    return this.authService.logout(userId, dto.refreshToken);
+    const ipAddress = req.ip || req.socket.remoteAddress;
+    const userAgent = req.headers['user-agent'];
+
+    return this.authService.logout(
+      userId,
+      dto.refreshToken,
+      dto.firebaseToken,
+      {
+        latitude: dto.latitude,
+        longitude: dto.longitude,
+        location: dto.location,
+        accuracy: dto.accuracy,
+      },
+      ipAddress,
+      userAgent,
+      bearerToken,
+    );
   }
 
   @Post('forgot-password')

@@ -59,4 +59,37 @@ export class RegisterDto {
     message: 'Registration role must be either CUSTOMER or TURF_OWNER',
   })
   role?: Role = Role.CUSTOMER;
+
+  @ApiPropertyOptional({
+    example: 'dK_fcm_token_sample_12345...',
+    description:
+      'Firebase Cloud Messaging (FCM) device token for push notifications',
+  })
+  @IsOptional()
+  @IsString()
+  firebaseToken?: string;
+
+  @ApiPropertyOptional({
+    example: 'dK_fcm_token_sample_12345...',
+    description: 'Alternative alias for firebaseToken (FCM Token)',
+  })
+  @IsOptional()
+  @IsString()
+  fcmToken?: string;
+
+  @ApiPropertyOptional({
+    example: 'ANDROID',
+    description: 'Device platform type (e.g. ANDROID, IOS, WEB)',
+  })
+  @IsOptional()
+  @IsString()
+  deviceType?: string;
+
+  @ApiPropertyOptional({
+    example: 'Samsung S24 / Chrome on Mac',
+    description: 'Device name or model descriptor',
+  })
+  @IsOptional()
+  @IsString()
+  deviceName?: string;
 }

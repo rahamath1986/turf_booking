@@ -52,6 +52,13 @@ describe('AuthService', () => {
       create: jest.fn(),
       update: jest.fn(),
     },
+    userDevice: {
+      upsert: jest.fn().mockResolvedValue({}),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+    },
+    auditLog: {
+      create: jest.fn().mockResolvedValue({}),
+    },
     $transaction: jest.fn((callback) => {
       if (typeof callback === 'function') {
         return callback(mockPrismaService);
@@ -127,8 +134,10 @@ describe('AuthService', () => {
 
       expect(result.user).toBeDefined();
       expect(result.user.email).toBe('test@turfbooking.com');
+      expect(result.authToken).toBe('mock_jwt_token_xyz');
       expect(result.accessToken).toBe('mock_jwt_token_xyz');
       expect(result.refreshToken).toBeDefined();
+      expect(result.timestamp).toBeDefined();
       expect(mockPrismaService.user.create).toHaveBeenCalled();
     });
 
@@ -146,18 +155,27 @@ describe('AuthService', () => {
   });
 
   describe('login', () => {
-    it('should successfully authenticate with valid email and password', async () => {
+    it('should successfully authenticate with valid email and password and return authToken, refreshToken, and timestamp', async () => {
       (prisma.user.findUnique as jest.Mock).mockResolvedValue(mockUser);
       (prisma.refreshToken.create as jest.Mock).mockResolvedValue({});
 
       const result = await service.login({
         email: 'test@turfbooking.com',
         password: 'ValidPassword#123',
+        firebaseToken: 'fcm_sample_token_xyz',
       });
 
       expect(result.user).toBeDefined();
+      expect(result.authToken).toBe('mock_jwt_token_xyz');
       expect(result.accessToken).toBe('mock_jwt_token_xyz');
       expect(result.refreshToken).toBe('mock_jwt_token_xyz');
+      expect(result.firebaseToken).toBe('fcm_sample_token_xyz');
+      expect(result.timestamp).toBeDefined();
+      expect(mockPrismaService.userDevice.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { deviceToken: 'fcm_sample_token_xyz' },
+        }),
+      );
     });
 
     it('should throw UnauthorizedException when password is invalid', async () => {
@@ -180,6 +198,99 @@ describe('AuthService', () => {
           password: 'ValidPassword#123',
         }),
       ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('should capture and return userLocation on login when provided', async () => {
+      (prisma.user.findUnique as jest.Mock).mockResolvedValue(mockUser);
+
+      const result = await service.login({
+        email: 'test@turfbooking.com',
+        password: 'ValidPassword#123',
+        latitude: 12.9716,
+        longitude: 77.5946,
+        location: 'Bengaluru, India',
+        accuracy: 10,
+      });
+
+      expect(result.userLocation).toEqual({
+        latitude: 12.9716,
+        longitude: 77.5946,
+        location: 'Bengaluru, India',
+        accuracy: 10,
+      });
+      expect(mockPrismaService.auditLog.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            action: 'LOGIN',
+            userId: mockUser.id,
+            newValues: expect.objectContaining({
+              userLocation: {
+                latitude: 12.9716,
+                longitude: 77.5946,
+                location: 'Bengaluru, India',
+                accuracy: 10,
+              },
+            }),
+          }),
+        }),
+      );
+    });
+  });
+
+  describe('logout', () => {
+    it('should revoke refreshToken, deactivate firebaseToken and return timestamp', async () => {
+      const result = await service.logout(
+        'user-uuid-1',
+        'sample_refresh_token',
+        'fcm_token_logout',
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.message).toBe('Logged out successfully');
+      expect(result.timestamp).toBeDefined();
+      expect(mockPrismaService.refreshToken.updateMany).toHaveBeenCalled();
+      expect(mockPrismaService.userDevice.updateMany).toHaveBeenCalledWith({
+        where: { deviceToken: 'fcm_token_logout' },
+        data: { isActive: false },
+      });
+    });
+
+    it('should record userLocation and audit log on logout when provided', async () => {
+      const result = await service.logout(
+        'user-uuid-1',
+        'sample_refresh_token',
+        undefined,
+        {
+          latitude: 13.0827,
+          longitude: 80.2707,
+          location: 'Chennai, India',
+          accuracy: 15,
+        },
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.userLocation).toEqual({
+        latitude: 13.0827,
+        longitude: 80.2707,
+        location: 'Chennai, India',
+        accuracy: 15,
+      });
+      expect(mockPrismaService.auditLog.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            action: 'LOGOUT',
+            userId: 'user-uuid-1',
+            newValues: expect.objectContaining({
+              userLocation: {
+                latitude: 13.0827,
+                longitude: 80.2707,
+                location: 'Chennai, India',
+                accuracy: 15,
+              },
+            }),
+          }),
+        }),
+      );
     });
   });
 

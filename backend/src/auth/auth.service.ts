@@ -113,6 +113,42 @@ export class AuthService {
   }
 
   // ---------------------------------------------------------------------------
+  // HELPER: Upsert / Save Firebase FCM Device Token
+  // ---------------------------------------------------------------------------
+  private async saveUserDeviceToken(
+    userId: string,
+    token?: string,
+    deviceType?: string,
+    deviceName?: string,
+  ): Promise<void> {
+    if (!token || token.trim().length === 0) return;
+    const cleanToken = token.trim();
+    try {
+      await this.prisma.userDevice.upsert({
+        where: { deviceToken: cleanToken },
+        update: {
+          userId,
+          deviceType: deviceType || 'WEB',
+          deviceName: deviceName || null,
+          isActive: true,
+          lastActiveAt: new Date(),
+        },
+        create: {
+          userId,
+          deviceToken: cleanToken,
+          deviceType: deviceType || 'WEB',
+          deviceName: deviceName || null,
+          isActive: true,
+          lastActiveAt: new Date(),
+        },
+      });
+      this.logger.log(`[Firebase Device Token] Registered token for user ${userId}`);
+    } catch (err: any) {
+      this.logger.warn(`Failed to store firebase device token: ${err?.message}`);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // 1. REGISTER
   // ---------------------------------------------------------------------------
   async register(dto: RegisterDto, ipAddress?: string, deviceInfo?: string) {
@@ -200,6 +236,18 @@ export class AuthService {
       deviceInfo,
     );
 
+    const fcmToken = dto.firebaseToken || dto.fcmToken;
+    if (fcmToken) {
+      await this.saveUserDeviceToken(
+        newUser.id,
+        fcmToken,
+        dto.deviceType,
+        dto.deviceName || deviceInfo,
+      );
+    }
+
+    const timestamp = new Date().toISOString();
+
     return {
       user: {
         id: newUser.id,
@@ -211,7 +259,12 @@ export class AuthService {
         isPhoneVerified: newUser.isPhoneVerified,
         createdAt: newUser.createdAt,
       },
-      ...tokens,
+      authToken: tokens.accessToken,
+      accessToken: tokens.accessToken,
+      token: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      firebaseToken: fcmToken || null,
+      timestamp,
     };
   }
 
@@ -256,6 +309,47 @@ export class AuthService {
       deviceInfo,
     );
 
+    const fcmToken = dto.firebaseToken || dto.fcmToken;
+    if (fcmToken) {
+      await this.saveUserDeviceToken(
+        user.id,
+        fcmToken,
+        dto.deviceType,
+        dto.deviceName || deviceInfo,
+      );
+    }
+
+    const timestamp = new Date().toISOString();
+
+    const userLocation =
+      dto.latitude !== undefined || dto.longitude !== undefined || dto.location
+        ? {
+            latitude: dto.latitude ?? null,
+            longitude: dto.longitude ?? null,
+            location: dto.location ?? null,
+            accuracy: dto.accuracy ?? null,
+          }
+        : null;
+
+    try {
+      await this.prisma.auditLog.create({
+        data: {
+          userId: user.id,
+          action: 'LOGIN',
+          entityType: 'User',
+          entityId: user.id,
+          ipAddress: ipAddress || null,
+          userAgent: deviceInfo || null,
+          newValues: {
+            userLocation,
+            timestamp,
+          },
+        },
+      });
+    } catch (auditErr: any) {
+      this.logger.warn(`Failed to create login audit log: ${auditErr?.message}`);
+    }
+
     return {
       user: {
         id: user.id,
@@ -267,7 +361,13 @@ export class AuthService {
         isEmailVerified: user.isEmailVerified,
         isPhoneVerified: user.isPhoneVerified,
       },
-      ...tokens,
+      authToken: tokens.accessToken,
+      accessToken: tokens.accessToken,
+      token: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      firebaseToken: fcmToken || null,
+      userLocation,
+      timestamp,
     };
   }
 
@@ -405,6 +505,8 @@ export class AuthService {
         deviceInfo,
       );
 
+      const timestamp = new Date().toISOString();
+
       return {
         success: true,
         message: 'OTP verified successfully. Logged in.',
@@ -415,7 +517,11 @@ export class AuthService {
           phone: user.phone,
           roles,
         },
-        ...tokens,
+        authToken: tokens.accessToken,
+        accessToken: tokens.accessToken,
+        token: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+        timestamp,
       };
     }
 
@@ -592,33 +698,118 @@ export class AuthService {
       }),
     ]);
 
+    const timestamp = new Date().toISOString();
+
     return {
+      authToken: newAccessToken,
       accessToken: newAccessToken,
+      token: newAccessToken,
       refreshToken: newSignedRefreshToken,
+      timestamp,
     };
   }
 
   // ---------------------------------------------------------------------------
   // 6. LOGOUT
   // ---------------------------------------------------------------------------
-  async logout(userId?: string, refreshToken?: string) {
+  async logout(
+    userId?: string,
+    refreshToken?: string,
+    firebaseToken?: string,
+    locationData?: {
+      latitude?: number;
+      longitude?: number;
+      location?: string;
+      accuracy?: number;
+    },
+    ipAddress?: string,
+    userAgent?: string,
+    bearerToken?: string,
+  ) {
+    let resolvedUserId = userId;
+
+    if (!resolvedUserId && bearerToken) {
+      try {
+        const decoded: any = this.jwtService.decode(bearerToken);
+        resolvedUserId = decoded?.sub || decoded?.userId;
+      } catch {
+        // Ignored
+      }
+    }
+
     if (refreshToken) {
       const tokenHash = this.hashToken(refreshToken);
+      const stored = await this.prisma.refreshToken.findUnique({
+        where: { tokenHash },
+      });
+      if (stored && !resolvedUserId) {
+        resolvedUserId = stored.userId;
+      }
       await this.prisma.refreshToken.updateMany({
         where: { tokenHash },
         data: { isRevoked: true },
       });
-    } else if (userId) {
+    } else if (resolvedUserId) {
       // Revoke all active sessions for user if specific token not supplied
       await this.prisma.refreshToken.updateMany({
-        where: { userId, isRevoked: false },
+        where: { userId: resolvedUserId, isRevoked: false },
         data: { isRevoked: true },
       });
+    }
+
+    if (firebaseToken && firebaseToken.trim().length > 0) {
+      try {
+        await this.prisma.userDevice.updateMany({
+          where: { deviceToken: firebaseToken.trim() },
+          data: { isActive: false },
+        });
+        this.logger.log(`Deactivated firebase device token on logout`);
+      } catch (err: any) {
+        this.logger.warn(`Failed to deactivate device token on logout: ${err?.message}`);
+      }
+    }
+
+    const timestamp = new Date().toISOString();
+
+    const userLocation =
+      locationData &&
+      (locationData.latitude !== undefined ||
+        locationData.longitude !== undefined ||
+        locationData.location)
+        ? {
+            latitude: locationData.latitude ?? null,
+            longitude: locationData.longitude ?? null,
+            location: locationData.location ?? null,
+            accuracy: locationData.accuracy ?? null,
+          }
+        : null;
+
+    if (resolvedUserId) {
+      try {
+        await this.prisma.auditLog.create({
+          data: {
+            userId: resolvedUserId,
+            action: 'LOGOUT',
+            entityType: 'User',
+            entityId: resolvedUserId,
+            ipAddress: ipAddress || null,
+            userAgent: userAgent || null,
+            newValues: {
+              userLocation,
+              timestamp,
+            },
+          },
+        });
+      } catch (auditErr: any) {
+        this.logger.warn(`Failed to create logout audit log: ${auditErr?.message}`);
+      }
     }
 
     return {
       success: true,
       message: 'Logged out successfully',
+      userLocation,
+      timestamp,
     };
   }
 
