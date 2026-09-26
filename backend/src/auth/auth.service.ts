@@ -236,16 +236,6 @@ export class AuthService {
       deviceInfo,
     );
 
-    const fcmToken = dto.firebaseToken || dto.fcmToken;
-    if (fcmToken) {
-      await this.saveUserDeviceToken(
-        newUser.id,
-        fcmToken,
-        dto.deviceType,
-        dto.deviceName || deviceInfo,
-      );
-    }
-
     const timestamp = new Date().toISOString();
 
     return {
@@ -259,11 +249,8 @@ export class AuthService {
         isPhoneVerified: newUser.isPhoneVerified,
         createdAt: newUser.createdAt,
       },
-      authToken: tokens.accessToken,
       accessToken: tokens.accessToken,
-      token: tokens.accessToken,
       refreshToken: tokens.refreshToken,
-      firebaseToken: fcmToken || null,
       timestamp,
     };
   }
@@ -309,7 +296,7 @@ export class AuthService {
       deviceInfo,
     );
 
-    const fcmToken = dto.firebaseToken || dto.fcmToken;
+    const fcmToken = dto.fcmToken;
     if (fcmToken) {
       await this.saveUserDeviceToken(
         user.id,
@@ -322,12 +309,10 @@ export class AuthService {
     const timestamp = new Date().toISOString();
 
     const userLocation =
-      dto.latitude !== undefined || dto.longitude !== undefined || dto.location
+      dto.latitude !== undefined || dto.longitude !== undefined
         ? {
             latitude: dto.latitude ?? null,
             longitude: dto.longitude ?? null,
-            location: dto.location ?? null,
-            accuracy: dto.accuracy ?? null,
           }
         : null;
 
@@ -361,11 +346,8 @@ export class AuthService {
         isEmailVerified: user.isEmailVerified,
         isPhoneVerified: user.isPhoneVerified,
       },
-      authToken: tokens.accessToken,
       accessToken: tokens.accessToken,
-      token: tokens.accessToken,
       refreshToken: tokens.refreshToken,
-      firebaseToken: fcmToken || null,
       userLocation,
       timestamp,
     };
@@ -715,12 +697,10 @@ export class AuthService {
   async logout(
     userId?: string,
     refreshToken?: string,
-    firebaseToken?: string,
+    fcmToken?: string,
     locationData?: {
       latitude?: number;
       longitude?: number;
-      location?: string;
-      accuracy?: number;
     },
     ipAddress?: string,
     userAgent?: string,
@@ -757,13 +737,13 @@ export class AuthService {
       });
     }
 
-    if (firebaseToken && firebaseToken.trim().length > 0) {
+    if (fcmToken && fcmToken.trim().length > 0) {
       try {
         await this.prisma.userDevice.updateMany({
-          where: { deviceToken: firebaseToken.trim() },
+          where: { deviceToken: fcmToken.trim() },
           data: { isActive: false },
         });
-        this.logger.log(`Deactivated firebase device token on logout`);
+        this.logger.log(`Deactivated FCM device token on logout`);
       } catch (err: any) {
         this.logger.warn(`Failed to deactivate device token on logout: ${err?.message}`);
       }
@@ -774,13 +754,10 @@ export class AuthService {
     const userLocation =
       locationData &&
       (locationData.latitude !== undefined ||
-        locationData.longitude !== undefined ||
-        locationData.location)
+        locationData.longitude !== undefined)
         ? {
             latitude: locationData.latitude ?? null,
             longitude: locationData.longitude ?? null,
-            location: locationData.location ?? null,
-            accuracy: locationData.accuracy ?? null,
           }
         : null;
 

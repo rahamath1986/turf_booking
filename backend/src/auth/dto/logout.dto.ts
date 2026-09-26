@@ -14,11 +14,11 @@ export class LogoutDto {
   @ApiPropertyOptional({
     example: 'dK_fcm_token_sample_12345...',
     description:
-      'Firebase device push token to deactivate upon logout',
+      'FCM device push token to deactivate upon logout',
   })
   @IsOptional()
   @IsString()
-  firebaseToken?: string;
+  fcmToken?: string;
 
   @ApiPropertyOptional({
     example: 12.9716,
@@ -33,19 +33,4 @@ export class LogoutDto {
   })
   @IsOptional()
   longitude?: number;
-
-  @ApiPropertyOptional({
-    example: 'Koramangala, Bengaluru',
-    description: 'Human-readable location or city descriptor on logout',
-  })
-  @IsOptional()
-  @IsString()
-  location?: string;
-
-  @ApiPropertyOptional({
-    example: 15.5,
-    description: 'GPS accuracy radius in meters',
-  })
-  @IsOptional()
-  accuracy?: number;
 }

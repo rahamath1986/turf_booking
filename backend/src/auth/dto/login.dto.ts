@@ -25,14 +25,6 @@ export class LoginDto {
   })
   @IsOptional()
   @IsString()
-  firebaseToken?: string;
-
-  @ApiPropertyOptional({
-    example: 'dK_fcm_token_sample_12345...',
-    description: 'Alternative alias for firebaseToken (FCM Token)',
-  })
-  @IsOptional()
-  @IsString()
   fcmToken?: string;
 
   @ApiPropertyOptional({
@@ -64,19 +56,4 @@ export class LoginDto {
   })
   @IsOptional()
   longitude?: number;
-
-  @ApiPropertyOptional({
-    example: 'Koramangala, Bengaluru',
-    description: 'Human-readable location or city descriptor on login',
-  })
-  @IsOptional()
-  @IsString()
-  location?: string;
-
-  @ApiPropertyOptional({
-    example: 15.5,
-    description: 'GPS accuracy radius in meters',
-  })
-  @IsOptional()
-  accuracy?: number;
 }

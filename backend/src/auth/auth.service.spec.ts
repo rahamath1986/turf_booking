@@ -134,7 +134,6 @@ describe('AuthService', () => {
 
       expect(result.user).toBeDefined();
       expect(result.user.email).toBe('test@turfbooking.com');
-      expect(result.authToken).toBe('mock_jwt_token_xyz');
       expect(result.accessToken).toBe('mock_jwt_token_xyz');
       expect(result.refreshToken).toBeDefined();
       expect(result.timestamp).toBeDefined();
@@ -155,21 +154,19 @@ describe('AuthService', () => {
   });
 
   describe('login', () => {
-    it('should successfully authenticate with valid email and password and return authToken, refreshToken, and timestamp', async () => {
+    it('should successfully authenticate with valid email and password and return accessToken, refreshToken, and timestamp', async () => {
       (prisma.user.findUnique as jest.Mock).mockResolvedValue(mockUser);
       (prisma.refreshToken.create as jest.Mock).mockResolvedValue({});
 
       const result = await service.login({
         email: 'test@turfbooking.com',
         password: 'ValidPassword#123',
-        firebaseToken: 'fcm_sample_token_xyz',
+        fcmToken: 'fcm_sample_token_xyz',
       });
 
       expect(result.user).toBeDefined();
-      expect(result.authToken).toBe('mock_jwt_token_xyz');
       expect(result.accessToken).toBe('mock_jwt_token_xyz');
       expect(result.refreshToken).toBe('mock_jwt_token_xyz');
-      expect(result.firebaseToken).toBe('fcm_sample_token_xyz');
       expect(result.timestamp).toBeDefined();
       expect(mockPrismaService.userDevice.upsert).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -208,15 +205,11 @@ describe('AuthService', () => {
         password: 'ValidPassword#123',
         latitude: 12.9716,
         longitude: 77.5946,
-        location: 'Bengaluru, India',
-        accuracy: 10,
       });
 
       expect(result.userLocation).toEqual({
         latitude: 12.9716,
         longitude: 77.5946,
-        location: 'Bengaluru, India',
-        accuracy: 10,
       });
       expect(mockPrismaService.auditLog.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -227,8 +220,6 @@ describe('AuthService', () => {
               userLocation: {
                 latitude: 12.9716,
                 longitude: 77.5946,
-                location: 'Bengaluru, India',
-                accuracy: 10,
               },
             }),
           }),
@@ -238,7 +229,7 @@ describe('AuthService', () => {
   });
 
   describe('logout', () => {
-    it('should revoke refreshToken, deactivate firebaseToken and return timestamp', async () => {
+    it('should revoke refreshToken, deactivate fcmToken and return timestamp', async () => {
       const result = await service.logout(
         'user-uuid-1',
         'sample_refresh_token',
@@ -263,8 +254,6 @@ describe('AuthService', () => {
         {
           latitude: 13.0827,
           longitude: 80.2707,
-          location: 'Chennai, India',
-          accuracy: 15,
         },
       );
 
@@ -272,8 +261,6 @@ describe('AuthService', () => {
       expect(result.userLocation).toEqual({
         latitude: 13.0827,
         longitude: 80.2707,
-        location: 'Chennai, India',
-        accuracy: 15,
       });
       expect(mockPrismaService.auditLog.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -284,8 +271,6 @@ describe('AuthService', () => {
               userLocation: {
                 latitude: 13.0827,
                 longitude: 80.2707,
-                location: 'Chennai, India',
-                accuracy: 15,
               },
             }),
           }),

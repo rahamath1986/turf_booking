@@ -150,12 +150,10 @@ export class AuthController {
     return this.authService.logout(
       userId,
       dto.refreshToken,
-      dto.firebaseToken,
+      dto.fcmToken,
       {
         latitude: dto.latitude,
         longitude: dto.longitude,
-        location: dto.location,
-        accuracy: dto.accuracy,
       },
       ipAddress,
       userAgent,
