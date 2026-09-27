@@ -83,6 +83,17 @@ export class AuthController {
     return this.authService.sendOtp(dto);
   }
 
+  @Post('resend-otp')
+  @ApiOperation({
+    summary: 'Resend One-Time Password (OTP)',
+    description:
+      'Invalidates any previous pending OTP, generates a fresh 6-digit OTP, and returns it in response.',
+  })
+  @ApiResponse({ status: 200, description: 'OTP resent successfully' })
+  async resendOtp(@Body() dto: SendOtpDto) {
+    return this.authService.sendOtp(dto);
+  }
+
   @Post('verify-otp')
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 5, ttl: 60000 } }) // 5 verification attempts per minute
