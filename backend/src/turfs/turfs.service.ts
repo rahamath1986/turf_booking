@@ -211,8 +211,7 @@ export class TurfsService {
           city: true,
           area: true,
           images: {
-            where: { isCover: true },
-            take: 1,
+            orderBy: { displayOrder: 'asc' },
           },
           turfSports: {
             where: { isActive: true },
@@ -362,7 +361,7 @@ export class TurfsService {
       include: {
         city: true,
         area: true,
-        images: { where: { isCover: true }, take: 1 },
+        images: { orderBy: { displayOrder: 'asc' } },
         turfSports: { where: { isActive: true }, include: { sport: true } },
         turfFacilities: {
           where: { isActive: true },
@@ -427,7 +426,7 @@ export class TurfsService {
       include: {
         city: true,
         area: true,
-        images: { where: { isCover: true }, take: 1 },
+        images: { orderBy: { displayOrder: 'asc' } },
         turfSports: { where: { isActive: true }, include: { sport: true } },
       },
       take: limit,
@@ -449,7 +448,7 @@ export class TurfsService {
         include: {
           city: true,
           area: true,
-          images: { where: { isCover: true }, take: 1 },
+          images: { orderBy: { displayOrder: 'asc' } },
           turfSports: { where: { isActive: true }, include: { sport: true } },
         },
         take: remainingLimit,
@@ -473,7 +472,7 @@ export class TurfsService {
       include: {
         city: true,
         area: true,
-        images: { where: { isCover: true }, take: 1 },
+        images: { orderBy: { displayOrder: 'asc' } },
         turfSports: { where: { isActive: true }, include: { sport: true } },
       },
       orderBy: [{ totalReviews: 'desc' }, { ratingAverage: 'desc' }],
