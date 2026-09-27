@@ -398,7 +398,6 @@ export class AuthService {
       message: `OTP has been dispatched to ${identifier}`,
       expiresInSeconds: 600,
       otp: rawOtp,
-      devOtp: rawOtp,
     };
   }
 

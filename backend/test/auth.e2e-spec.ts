@@ -338,15 +338,15 @@ describe('Authentication & Authorization (e2e)', () => {
 
       expect(sendRes.status).toBe(200);
       expect(sendRes.body.success).toBe(true);
-      const devOtp = sendRes.body.data.devOtp;
-      expect(devOtp).toBeDefined();
+      const otp = sendRes.body.data.otp;
+      expect(otp).toBeDefined();
 
       const verifyRes = await request
         .default(app.getHttpServer())
         .post('/api/v1/auth/verify-otp')
         .send({
           identifier: otpPhone,
-          otp: devOtp,
+          otp,
           purpose: 'REGISTER',
         });
 
