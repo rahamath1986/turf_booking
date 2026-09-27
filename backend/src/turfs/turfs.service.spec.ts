@@ -119,6 +119,66 @@ describe('TurfsService', () => {
       expect(result.meta.totalItems).toBe(1);
       expect(result.meta.page).toBe(1);
     });
+
+    it('should filter turfs by facilityIds', async () => {
+      mockPrismaService.turf.findMany.mockResolvedValue([mockTurf]);
+      mockPrismaService.turf.count.mockResolvedValue(1);
+
+      const facilityId1 = 'b1a13e2e-2f10-449e-b2d2-8f9f0909419b';
+      const facilityId2 = 'c2b23e2e-2f10-449e-b2d2-8f9f0909419c';
+
+      await service.findAll({
+        page: 1,
+        limit: 10,
+        facilityIds: [facilityId1, facilityId2],
+      } as any);
+
+      expect(mockPrismaService.turf.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            AND: [
+              {
+                turfFacilities: {
+                  some: { facilityId: facilityId1, isActive: true },
+                },
+              },
+              {
+                turfFacilities: {
+                  some: { facilityId: facilityId2, isActive: true },
+                },
+              },
+            ],
+          }),
+        }),
+      );
+    });
+
+    it('should filter turfs by amenities alias', async () => {
+      mockPrismaService.turf.findMany.mockResolvedValue([mockTurf]);
+      mockPrismaService.turf.count.mockResolvedValue(1);
+
+      const facilityId = 'b1a13e2e-2f10-449e-b2d2-8f9f0909419b';
+
+      await service.findAll({
+        page: 1,
+        limit: 10,
+        amenities: [facilityId],
+      } as any);
+
+      expect(mockPrismaService.turf.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            AND: [
+              {
+                turfFacilities: {
+                  some: { facilityId, isActive: true },
+                },
+              },
+            ],
+          }),
+        }),
+      );
+    });
   });
 
   describe('findOne', () => {

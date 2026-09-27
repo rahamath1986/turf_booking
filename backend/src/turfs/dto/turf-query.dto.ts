@@ -1,6 +1,7 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
+  IsArray,
   IsNumber,
   IsOptional,
   IsString,
@@ -40,6 +41,51 @@ export class TurfQueryDto extends PaginationQueryDto {
   @IsString()
   sport?: string;
 
+  @ApiPropertyOptional({
+    description:
+      'Filter by amenity / facility IDs (array or comma-separated UUIDs)',
+    type: [String],
+    example: ['b1a13e2e-2f10-449e-b2d2-8f9f0909419b'],
+  })
+  @IsOptional()
+  @Transform(({ value }) => {
+    if (!value) return undefined;
+    const items = Array.isArray(value)
+      ? value.flatMap((v) => (typeof v === 'string' ? v.split(',') : v))
+      : typeof value === 'string'
+        ? value.split(',')
+        : [value];
+    const cleaned = items
+      .map((item) => (typeof item === 'string' ? item.trim() : item))
+      .filter((item) => Boolean(item));
+    return cleaned.length > 0 ? cleaned : undefined;
+  })
+  @IsArray()
+  @IsUUID('all', { each: true })
+  facilityIds?: string[];
+
+  @ApiPropertyOptional({
+    description:
+      'Alias for facilityIds: filter by amenity IDs (array or comma-separated UUIDs)',
+    type: [String],
+  })
+  @IsOptional()
+  @Transform(({ value }) => {
+    if (!value) return undefined;
+    const items = Array.isArray(value)
+      ? value.flatMap((v) => (typeof v === 'string' ? v.split(',') : v))
+      : typeof value === 'string'
+        ? value.split(',')
+        : [value];
+    const cleaned = items
+      .map((item) => (typeof item === 'string' ? item.trim() : item))
+      .filter((item) => Boolean(item));
+    return cleaned.length > 0 ? cleaned : undefined;
+  })
+  @IsArray()
+  @IsUUID('all', { each: true })
+  amenities?: string[];
+
   @ApiPropertyOptional({ description: 'Minimum hourly price' })
   @IsOptional()
   @Type(() => Number)
@@ -61,4 +107,16 @@ export class TurfQueryDto extends PaginationQueryDto {
   @Min(0)
   @Max(5)
   minRating?: number;
+
+  @ApiPropertyOptional({ description: 'Optional user GPS latitude for distance computation' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  latitude?: number;
+
+  @ApiPropertyOptional({ description: 'Optional user GPS longitude for distance computation' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  longitude?: number;
 }

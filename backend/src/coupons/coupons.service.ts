@@ -102,44 +102,33 @@ export class CouponsService {
       where: { code },
     });
 
+    const failure = (msg: string) => ({
+      valid: false,
+      isValid: false,
+      message: msg,
+      reason: msg,
+      discountAmount: 0,
+      finalAmount: orderAmount,
+    });
+
     if (!coupon) {
-      return {
-        valid: false,
-        message: `Coupon code '${code}' does not exist`,
-        discountAmount: 0,
-        finalAmount: orderAmount,
-      };
+      return failure(`Coupon code '${code}' does not exist`);
     }
 
     // 1. Active status check
     if (!coupon.isActive) {
-      return {
-        valid: false,
-        message: `Coupon code '${code}' is no longer active`,
-        discountAmount: 0,
-        finalAmount: orderAmount,
-      };
+      return failure(`Coupon code '${code}' is no longer active`);
     }
 
     const now = new Date();
 
     // 2. Expiry / Active period check
     if (now < coupon.startDate) {
-      return {
-        valid: false,
-        message: `Coupon code '${code}' is not active yet`,
-        discountAmount: 0,
-        finalAmount: orderAmount,
-      };
+      return failure(`Coupon code '${code}' is not active yet`);
     }
 
     if (now > coupon.endDate) {
-      return {
-        valid: false,
-        message: `Coupon code '${code}' has expired`,
-        discountAmount: 0,
-        finalAmount: orderAmount,
-      };
+      return failure(`Coupon code '${code}' has expired`);
     }
 
     // 3. Total usage limit check
@@ -147,12 +136,7 @@ export class CouponsService {
       coupon.totalUsageLimit !== null &&
       coupon.currentUsageCount >= coupon.totalUsageLimit
     ) {
-      return {
-        valid: false,
-        message: `Coupon code '${code}' has reached its total usage limit`,
-        discountAmount: 0,
-        finalAmount: orderAmount,
-      };
+      return failure(`Coupon code '${code}' has reached its total usage limit`);
     }
 
     // 4. Per-user limit check
@@ -165,12 +149,7 @@ export class CouponsService {
       });
 
       if (userUsageCount >= coupon.perUserLimit) {
-        return {
-          valid: false,
-          message: `You have reached the maximum allowed redemptions (${coupon.perUserLimit}) for this coupon`,
-          discountAmount: 0,
-          finalAmount: orderAmount,
-        };
+        return failure(`You have reached the maximum allowed redemptions (${coupon.perUserLimit}) for this coupon`);
       }
     }
 
@@ -184,35 +163,20 @@ export class CouponsService {
       });
 
       if (priorConfirmedBookings > 0) {
-        return {
-          valid: false,
-          message: `Coupon code '${code}' is exclusively reserved for first-time bookings`,
-          discountAmount: 0,
-          finalAmount: orderAmount,
-        };
+        return failure(`Coupon code '${code}' is exclusively reserved for first-time bookings`);
       }
     }
 
     // 6. Minimum order amount check
     const minOrder = Number(coupon.minOrderAmount);
     if (orderAmount < minOrder) {
-      return {
-        valid: false,
-        message: `Minimum booking amount of ₹${minOrder} required to apply this coupon`,
-        discountAmount: 0,
-        finalAmount: orderAmount,
-      };
+      return failure(`Minimum booking amount of ₹${minOrder} required to apply this coupon`);
     }
 
     // 7. Turf restriction check
     if (coupon.turfIds && coupon.turfIds.length > 0) {
       if (!dto.turfId || !coupon.turfIds.includes(dto.turfId)) {
-        return {
-          valid: false,
-          message: `This coupon is not valid for the selected turf venue`,
-          discountAmount: 0,
-          finalAmount: orderAmount,
-        };
+        return failure(`This coupon is not valid for the selected turf venue`);
       }
     }
 
@@ -224,12 +188,7 @@ export class CouponsService {
           .map((s) => s.toUpperCase())
           .includes(dto.sportType.toUpperCase())
       ) {
-        return {
-          valid: false,
-          message: `This coupon is only valid for ${coupon.sportTypes.join(', ')} bookings`,
-          discountAmount: 0,
-          finalAmount: orderAmount,
-        };
+        return failure(`This coupon is only valid for ${coupon.sportTypes.join(', ')} bookings`);
       }
     }
 
@@ -258,7 +217,9 @@ export class CouponsService {
 
     return {
       valid: true,
+      isValid: true,
       message: 'Coupon applied successfully',
+      reason: 'Coupon applied successfully',
       coupon: {
         id: coupon.id,
         code: coupon.code,

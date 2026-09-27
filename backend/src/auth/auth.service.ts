@@ -20,6 +20,7 @@ import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { GoogleLoginDto } from './dto/google-login.dto';
 import { JwtPayload } from './strategies/jwt.strategy';
 
 @Injectable()
@@ -967,6 +968,165 @@ export class AuthService {
       devices: user.devices,
       createdAt: user.createdAt,
       updatedAt: user.updatedAt,
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // 11. GOOGLE LOGIN / SOCIAL SIGN-IN
+  // ---------------------------------------------------------------------------
+  async googleLogin(dto: GoogleLoginDto, ipAddress?: string, deviceInfo?: string) {
+    const normalizedEmail = dto.email.toLowerCase().trim();
+
+    let user = await this.prisma.user.findUnique({
+      where: { email: normalizedEmail },
+      include: {
+        roles: { include: { role: true } },
+      },
+    });
+
+    if (user) {
+      if (user.deletedAt !== null) {
+        throw new UnauthorizedException('User account has been deleted');
+      }
+      if (!user.isActive) {
+        throw new UnauthorizedException('User account is currently deactivated');
+      }
+
+      // Update avatar or name if missing
+      const shouldUpdateAvatar = !user.avatarUrl && dto.avatarUrl;
+      const shouldUpdateName = (!user.fullName || user.fullName === 'User') && dto.fullName;
+      if (shouldUpdateAvatar || shouldUpdateName) {
+        user = await this.prisma.user.update({
+          where: { id: user.id },
+          data: {
+            ...(shouldUpdateAvatar && { avatarUrl: dto.avatarUrl }),
+            ...(shouldUpdateName && { fullName: dto.fullName }),
+            isEmailVerified: true,
+          },
+          include: {
+            roles: { include: { role: true } },
+          },
+        });
+      }
+    } else {
+      // Find default CUSTOMER role
+      let roleRecord = await this.prisma.role.findUnique({
+        where: { name: RoleEnum.CUSTOMER },
+      });
+
+      if (!roleRecord) {
+        roleRecord = await this.prisma.role.findFirst({
+          where: { name: 'CUSTOMER' },
+        });
+      }
+
+      if (!roleRecord) {
+        throw new InternalServerErrorException('Default user role not configured');
+      }
+
+      const randomPassword = crypto.randomBytes(32).toString('hex');
+      const passwordHash = await argon2.hash(randomPassword, {
+        type: argon2.argon2id,
+        memoryCost: 65536,
+        timeCost: 3,
+        parallelism: 4,
+      });
+
+      user = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.user.create({
+          data: {
+            email: normalizedEmail,
+            fullName: dto.fullName?.trim() || normalizedEmail.split('@')[0],
+            avatarUrl: dto.avatarUrl || null,
+            passwordHash,
+            isActive: true,
+            isEmailVerified: true,
+            isPhoneVerified: false,
+          },
+        });
+
+        await tx.userRole.create({
+          data: {
+            userId: created.id,
+            roleId: roleRecord!.id,
+          },
+        });
+
+        return tx.user.findUnique({
+          where: { id: created.id },
+          include: {
+            roles: { include: { role: true } },
+          },
+        });
+      });
+    }
+
+    if (!user) {
+      throw new InternalServerErrorException('Failed to process Google sign-in');
+    }
+
+    const roles = user.roles.map((r) => r.role.name);
+    const tokens = await this.generateTokens(
+      user.id,
+      user.email,
+      roles,
+      ipAddress,
+      deviceInfo,
+    );
+
+    if (dto.fcmToken) {
+      await this.saveUserDeviceToken(
+        user.id,
+        dto.fcmToken,
+        'MOBILE',
+        deviceInfo || 'Google Auth Client',
+      );
+    }
+
+    const timestamp = new Date().toISOString();
+    const userLocation =
+      dto.latitude !== undefined || dto.longitude !== undefined
+        ? {
+            latitude: dto.latitude ?? null,
+            longitude: dto.longitude ?? null,
+            location: dto.location ?? null,
+          }
+        : null;
+
+    try {
+      await this.prisma.auditLog.create({
+        data: {
+          userId: user.id,
+          action: 'LOGIN_GOOGLE',
+          entityType: 'User',
+          entityId: user.id,
+          ipAddress: ipAddress || null,
+          userAgent: deviceInfo || null,
+          newValues: {
+            userLocation,
+            timestamp,
+          },
+        },
+      });
+    } catch (auditErr: any) {
+      this.logger.warn(`Failed to create google login audit log: ${auditErr?.message}`);
+    }
+
+    return {
+      user: {
+        id: user.id,
+        email: user.email,
+        fullName: user.fullName,
+        phone: user.phone,
+        roles,
+        avatarUrl: user.avatarUrl,
+        isEmailVerified: user.isEmailVerified,
+        isPhoneVerified: user.isPhoneVerified,
+      },
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      userLocation,
+      timestamp,
     };
   }
 }

@@ -20,6 +20,7 @@ import { CreateBookingDto } from './dto/create-booking.dto';
 import { CancelBookingDto } from './dto/cancel-booking.dto';
 import { RescheduleBookingDto } from './dto/reschedule-booking.dto';
 import { BookingQueryDto } from './dto/booking-query.dto';
+import { CalculateQuoteDto } from './dto/calculate-quote.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 
@@ -34,6 +35,25 @@ export class BookingsController {
     private readonly bookingsService: BookingsService,
     private readonly refundsService: RefundsService,
   ) {}
+
+  @Post('calculate-quote')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Calculate fee breakdown and price quote before checkout',
+    description:
+      'Calculates the exact server-side pricing breakdown including Turf Price, 10% Platform Fee, Taxes, and optional custom fees/discounts before payment gateway order creation.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Calculated price quote and fee breakdown',
+  })
+  @ApiResponse({ status: 404, description: 'Turf venue or slot hold not found' })
+  calculateQuote(
+    @CurrentUser('userId') userId: string,
+    @Body() dto: CalculateQuoteDto,
+  ) {
+    return this.bookingsService.calculateQuote(userId, dto);
+  }
 
   @Post()
   @ApiOperation({

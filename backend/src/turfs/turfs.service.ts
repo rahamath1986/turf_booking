@@ -143,6 +143,27 @@ export class TurfsService {
       };
     }
 
+    // Facility / Amenity Filter
+    const targetFacilityIds = query.facilityIds || query.amenities;
+    if (targetFacilityIds && targetFacilityIds.length > 0) {
+      const uniqueFacilityIds = [...new Set(targetFacilityIds)];
+      where.AND = [
+        ...(Array.isArray(where.AND)
+          ? where.AND
+          : where.AND
+            ? [where.AND]
+            : []),
+        ...uniqueFacilityIds.map((facilityId) => ({
+          turfFacilities: {
+            some: {
+              facilityId,
+              isActive: true,
+            },
+          },
+        })),
+      ];
+    }
+
     // Rating Filter
     if (query.minRating !== undefined && query.minRating > 0) {
       where.ratingAverage = { gte: query.minRating };
@@ -216,8 +237,37 @@ export class TurfsService {
 
     const totalPages = Math.ceil(totalItems / limit) || 1;
 
+    const enrichedItems = items.map((item) => {
+      const amenities = (item.turfFacilities || [])
+        .map((tf) => tf.facility?.name)
+        .filter(Boolean);
+
+      let distance: string | null = null;
+      let distanceKm: number | null = null;
+      if (
+        query.latitude != null &&
+        query.longitude != null &&
+        item.latitude != null &&
+        item.longitude != null
+      ) {
+        distanceKm = this.calculateDistanceKm(
+          Number(query.latitude),
+          Number(query.longitude),
+          Number(item.latitude),
+          Number(item.longitude),
+        );
+        distance = `${distanceKm.toFixed(1)} km`;
+      }
+
+      return {
+        ...item,
+        amenities,
+        ...(distanceKm != null && { distanceKm, distance }),
+      };
+    });
+
     return {
-      items,
+      items: enrichedItems,
       meta: {
         page,
         limit,
@@ -281,7 +331,12 @@ export class TurfsService {
       throw new NotFoundException(`Turf venue "${id}" not found`);
     }
 
-    return turf;
+    return {
+      ...turf,
+      amenities: (turf.turfFacilities || [])
+        .map((tf) => tf.facility?.name)
+        .filter(Boolean),
+    };
   }
 
   // 3. GET /api/v1/turfs/search
@@ -309,6 +364,10 @@ export class TurfsService {
         area: true,
         images: { where: { isCover: true }, take: 1 },
         turfSports: { where: { isActive: true }, include: { sport: true } },
+        turfFacilities: {
+          where: { isActive: true },
+          include: { facility: true },
+        },
         pricingRules: { where: { isActive: true }, take: 1 },
       },
     });
@@ -327,6 +386,10 @@ export class TurfsService {
         return {
           ...turf,
           distanceKm,
+          distance: `${distanceKm.toFixed(1)} km`,
+          amenities: (turf.turfFacilities || [])
+            .map((tf) => tf.facility?.name)
+            .filter(Boolean),
         };
       })
       .filter((turf) => turf.distanceKm <= radiusKm)

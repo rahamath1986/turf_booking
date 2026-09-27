@@ -26,6 +26,7 @@ import { LogoutDto } from './dto/logout.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { GoogleLoginDto } from './dto/google-login.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 
@@ -220,5 +221,19 @@ export class AuthController {
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   async getMe(@CurrentUser('userId') userId: string) {
     return this.authService.getMe(userId);
+  }
+
+  @Post('google')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Authenticate or register user via Google OAuth',
+    description:
+      'Verifies Google credentials, provisions account if not existing, records location, and returns JWT tokens.',
+  })
+  @ApiResponse({ status: 200, description: 'User authenticated successfully' })
+  async googleLogin(@Body() dto: GoogleLoginDto, @Req() req: Request) {
+    const ipAddress = req.ip || req.socket.remoteAddress;
+    const deviceInfo = req.headers['user-agent'];
+    return this.authService.googleLogin(dto, ipAddress, deviceInfo);
   }
 }

@@ -5,24 +5,107 @@ import {
   GoneException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { BookingStatus, HoldStatus, Prisma } from '@prisma/client';
 import { randomBytes } from 'crypto';
+import * as QRCode from 'qrcode';
 import { PrismaService } from '../database/prisma.service';
 import { AvailabilityService } from '../availability/availability.service';
+import { CouponsService } from '../coupons/coupons.service';
 import { CreateHoldDto } from './dto/create-hold.dto';
 import { CreateBookingDto } from './dto/create-booking.dto';
 import { CancelBookingDto } from './dto/cancel-booking.dto';
 import { RescheduleBookingDto } from './dto/reschedule-booking.dto';
 import { BookingQueryDto } from './dto/booking-query.dto';
+import { CalculateQuoteDto } from './dto/calculate-quote.dto';
 import { Role } from '../common/enums/role.enum';
+
+export interface FeeBreakdownItem {
+  name: string;
+  amount: number;
+}
+
+export interface FeeBreakdown {
+  turfPrice: number;
+  basePrice: number;
+  platformFee: number;
+  platformFeeRate: number; // 0.10 (10%)
+  taxes: number;
+  taxAmount: number;
+  taxRate: number; // 0.18 (18% GST)
+  customFees: number;
+  discountAmount: number;
+  totalAmount: number;
+  totalPrice: number;
+  items: FeeBreakdownItem[];
+}
 
 @Injectable()
 export class BookingsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly availabilityService: AvailabilityService,
+    @Optional() private readonly couponsService?: CouponsService,
   ) {}
+
+  calculateFeeBreakdown(
+    turfPrice: number,
+    discountAmount = 0,
+    customFeeItems?: { name: string; amount: number }[],
+  ): FeeBreakdown {
+    const base = Math.round(Number(turfPrice) * 100) / 100;
+    const platformFeeRate = 0.1; // 10% Platform Fee
+    const platformFee = Math.round(base * platformFeeRate * 100) / 100;
+    const taxRate = 0.18; // 18% GST on platform fee
+    const taxes = Math.round(platformFee * taxRate * 100) / 100;
+
+    let customFeesTotal = 0;
+    const customItems: FeeBreakdownItem[] = [];
+    if (customFeeItems && customFeeItems.length > 0) {
+      for (const item of customFeeItems) {
+        const amt = Math.max(0, Math.round(Number(item.amount) * 100) / 100);
+        customFeesTotal += amt;
+        customItems.push({ name: item.name, amount: amt });
+      }
+    }
+
+    const discount = Math.min(
+      base,
+      Math.max(0, Math.round(Number(discountAmount) * 100) / 100),
+    );
+
+    const totalAmount =
+      Math.round(
+        (base + platformFee + taxes + customFeesTotal - discount) * 100,
+      ) / 100;
+
+    const items: FeeBreakdownItem[] = [
+      { name: 'Turf Price', amount: base },
+      { name: 'Platform Fee (10%)', amount: platformFee },
+      { name: 'Taxes', amount: taxes },
+      ...customItems,
+    ];
+
+    if (discount > 0) {
+      items.push({ name: 'Discount', amount: -discount });
+    }
+
+    return {
+      turfPrice: base,
+      basePrice: base,
+      platformFee,
+      platformFeeRate,
+      taxes,
+      taxAmount: taxes,
+      taxRate,
+      customFees: customFeesTotal,
+      discountAmount: discount,
+      totalAmount,
+      totalPrice: totalAmount,
+      items,
+    };
+  }
 
   // ---------------------------------------------------------------------------
   // HELPER UTILITIES
@@ -226,7 +309,12 @@ export class BookingsService {
         },
       });
 
-      return hold;
+      const feeBreakdown = this.calculateFeeBreakdown(calculatedPrice);
+
+      return {
+        ...hold,
+        feeBreakdown,
+      };
     });
   }
 
@@ -257,16 +345,23 @@ export class BookingsService {
 
     // Lazy expiration check
     if (hold.status === HoldStatus.ACTIVE && hold.expiresAt < new Date()) {
-      return this.prisma.slotHold.update({
+      const expired = await this.prisma.slotHold.update({
         where: { id: holdId },
         data: {
           status: HoldStatus.EXPIRED,
           activeHoldKey: null,
         },
       });
+      return {
+        ...expired,
+        feeBreakdown: this.calculateFeeBreakdown(Number(expired.totalPrice)),
+      };
     }
 
-    return hold;
+    return {
+      ...hold,
+      feeBreakdown: this.calculateFeeBreakdown(Number(hold.totalPrice)),
+    };
   }
 
   /**
@@ -459,6 +554,32 @@ export class BookingsService {
         );
       }
 
+      let discountAmount = 0;
+      if (dto.couponCode && this.couponsService) {
+        try {
+          const couponRes = await this.couponsService.validateCoupon(
+            {
+              code: dto.couponCode,
+              amount: totalPrice,
+              turfId,
+              sportType: sportId,
+            },
+            userId,
+          );
+          if (couponRes && couponRes.valid) {
+            discountAmount = couponRes.discountAmount;
+          }
+        } catch {
+          // ignore error and proceed without discount
+        }
+      }
+
+      const feeBreakdown = this.calculateFeeBreakdown(
+        totalPrice,
+        discountAmount,
+        dto.customFeeItems,
+      );
+
       const activeSlotKey = `${turfId}_${bookingDateStr}_${startTime}`;
       const bookingNumber = this.generateBookingNumber();
 
@@ -475,12 +596,24 @@ export class BookingsService {
           status: BookingStatus.CONFIRMED,
           activeSlotKey,
           idempotencyKey: dto.idempotencyKey ?? null,
-          basePrice: totalPrice,
-          totalPrice,
+          basePrice: feeBreakdown.basePrice,
+          taxAmount: feeBreakdown.taxAmount,
+          discountAmount: feeBreakdown.discountAmount,
+          totalPrice: feeBreakdown.totalAmount,
         },
         include: {
           turf: {
-            select: { id: true, name: true, addressLine: true, city: true },
+            select: {
+              id: true,
+              name: true,
+              coverImageUrl: true,
+              addressLine: true,
+              city: true,
+              images: {
+                where: { isCover: true },
+                take: 1,
+              },
+            },
           },
         },
       });
@@ -498,8 +631,155 @@ export class BookingsService {
         },
       });
 
-      return booking;
+      let qrCodeDataUrl: string | null = null;
+      try {
+        qrCodeDataUrl = await QRCode.toDataURL(booking.bookingNumber, {
+          width: 320,
+          margin: 2,
+          color: { dark: '#000000', light: '#ffffff' },
+        });
+      } catch {
+        qrCodeDataUrl = null;
+      }
+
+      return {
+        ...booking,
+        qrCodeDataUrl,
+        paymentMethod: 'UPI',
+        paymentStatus: 'PAID',
+        feeBreakdown,
+      };
     });
+  }
+
+  /**
+   * POST /api/v1/bookings/calculate-quote
+   * Computes the exact pre-checkout price quote and fee breakdown.
+   */
+  async calculateQuote(userId: string, dto: CalculateQuoteDto) {
+    let turfId = dto.turfId;
+    let targetDateStr = dto.date || dto.bookingDate;
+    let startTime = dto.startTime;
+    let endTime = dto.endTime;
+    let sportId = dto.sportId;
+    let basePrice = 1000;
+    let holdRecord: any = null;
+
+    if (dto.holdId) {
+      const hold = await this.prisma.slotHold.findUnique({
+        where: { id: dto.holdId },
+        include: {
+          turf: {
+            select: { id: true, name: true, addressLine: true, city: true },
+          },
+          sport: true,
+        },
+      });
+
+      if (!hold) {
+        throw new NotFoundException(`SlotHold record "${dto.holdId}" not found`);
+      }
+
+      if (hold.status !== HoldStatus.ACTIVE || hold.expiresAt < new Date()) {
+        throw new GoneException(
+          'Your hold has expired. Please select and hold the slot again.',
+        );
+      }
+
+      turfId = hold.turfId;
+      targetDateStr = this.formatDateIso(hold.holdDate);
+      startTime = hold.startTime;
+      endTime = hold.endTime;
+      sportId = hold.sportId ?? undefined;
+      basePrice = Number(hold.totalPrice);
+      holdRecord = hold;
+    } else {
+      if (!turfId || !targetDateStr || !startTime) {
+        throw new BadRequestException(
+          'Either holdId or (turfId, date/bookingDate, startTime) must be provided',
+        );
+      }
+
+      const turf = await this.prisma.turf.findFirst({
+        where: { id: turfId, isActive: true, deletedAt: null },
+      });
+
+      if (!turf) {
+        throw new NotFoundException(`Turf venue "${turfId}" not found`);
+      }
+
+      const slotsOverview = await this.availabilityService.getAvailableSlots(
+        turfId,
+        {
+          date: targetDateStr,
+          sportId,
+        },
+      );
+
+      const matchedSlot = slotsOverview.slots.find(
+        (s) => s.startTime === startTime,
+      );
+
+      basePrice = matchedSlot ? matchedSlot.price : 1000;
+    }
+
+    // Coupon discount calculation if couponCode provided
+    let discountAmount = 0;
+    let couponDetails: any = null;
+
+    if (dto.couponCode && this.couponsService) {
+      try {
+        const couponRes = await this.couponsService.validateCoupon(
+          {
+            code: dto.couponCode,
+            amount: basePrice,
+            turfId,
+            sportType: sportId,
+          },
+          userId,
+        );
+        if (couponRes && couponRes.valid) {
+          discountAmount = couponRes.discountAmount;
+          couponDetails = {
+            code: dto.couponCode,
+            discountAmount: couponRes.discountAmount,
+            isValid: true,
+          };
+        } else {
+          couponDetails = {
+            code: dto.couponCode,
+            discountAmount: 0,
+            isValid: false,
+            reason: couponRes?.message || 'Invalid coupon',
+          };
+        }
+      } catch {
+        couponDetails = {
+          code: dto.couponCode,
+          discountAmount: 0,
+          isValid: false,
+          reason: 'Coupon validation failed',
+        };
+      }
+    }
+
+    const feeBreakdown = this.calculateFeeBreakdown(
+      basePrice,
+      discountAmount,
+      dto.customFeeItems,
+    );
+
+    return {
+      turfId,
+      bookingDate: targetDateStr,
+      startTime,
+      endTime,
+      sportId,
+      holdId: dto.holdId ?? null,
+      holdExpiresAt: holdRecord ? holdRecord.expiresAt : null,
+      coupon: couponDetails,
+      feeBreakdown,
+    };
   }
 
   /**
@@ -545,7 +825,17 @@ export class BookingsService {
         orderBy: { createdAt: 'desc' },
         include: {
           turf: {
-            select: { id: true, name: true, addressLine: true, city: true },
+            select: {
+              id: true,
+              name: true,
+              coverImageUrl: true,
+              addressLine: true,
+              city: true,
+              images: {
+                where: { isCover: true },
+                take: 1,
+              },
+            },
           },
           sport: {
             select: { id: true, name: true },
@@ -584,11 +874,19 @@ export class BookingsService {
           include: {
             owner: true,
             city: true,
+            images: {
+              where: { isCover: true },
+              take: 1,
+            },
           },
         },
         sport: true,
         user: {
           select: { id: true, fullName: true, email: true, phone: true },
+        },
+        payments: {
+          orderBy: { createdAt: 'desc' },
+          take: 1,
         },
         statusHistory: {
           orderBy: { createdAt: 'asc' },
@@ -616,7 +914,25 @@ export class BookingsService {
       );
     }
 
-    return booking;
+    let qrCodeDataUrl: string | null = null;
+    try {
+      qrCodeDataUrl = await QRCode.toDataURL(booking.bookingNumber, {
+        width: 320,
+        margin: 2,
+        color: { dark: '#000000', light: '#ffffff' },
+      });
+    } catch {
+      qrCodeDataUrl = null;
+    }
+
+    const latestPayment = (booking as any).payments?.[0];
+
+    return {
+      ...booking,
+      qrCodeDataUrl,
+      paymentMethod: latestPayment?.provider || 'UPI',
+      paymentStatus: latestPayment?.status || 'PAID',
+    };
   }
 
   /**

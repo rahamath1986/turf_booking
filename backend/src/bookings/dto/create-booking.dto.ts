@@ -1,11 +1,15 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 import {
+  IsArray,
   IsDateString,
   IsOptional,
   IsString,
   IsUUID,
   Matches,
+  ValidateNested,
 } from 'class-validator';
+import { CustomFeeItemDto } from './calculate-quote.dto';
 
 export class CreateBookingDto {
   @ApiPropertyOptional({
@@ -72,4 +76,22 @@ export class CreateBookingDto {
   @IsOptional()
   @IsString()
   idempotencyKey?: string;
+
+  @ApiPropertyOptional({
+    description: 'Optional coupon code for booking discount',
+    example: 'PLAY100',
+  })
+  @IsOptional()
+  @IsString()
+  couponCode?: string;
+
+  @ApiPropertyOptional({
+    description: 'Optional custom fee items (e.g. equipment rental, coaching fee)',
+    type: [CustomFeeItemDto],
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CustomFeeItemDto)
+  customFeeItems?: CustomFeeItemDto[];
 }

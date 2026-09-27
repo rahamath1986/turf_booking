@@ -13,7 +13,7 @@ export class TurfsController {
   @ApiOperation({
     summary: 'Browse and filter active turfs',
     description:
-      'Returns paginated turfs filtered by city, sport, rating, and price.',
+      'Returns paginated turfs filtered by city, area, sport, amenities/facilities, rating, and price.',
   })
   @ApiResponse({ status: 200, description: 'Paginated turf venues' })
   findAll(@Query() query: TurfQueryDto) {
