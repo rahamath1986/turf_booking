@@ -1,5 +1,15 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsDateString, IsNotEmpty, IsString, Matches } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
+import {
+  IsArray,
+  IsDateString,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  Matches,
+  ValidateNested,
+} from 'class-validator';
+import { BookingTimeSlotDto } from './booking-time-slot.dto';
 
 export class RescheduleBookingDto {
   @ApiProperty({
@@ -10,23 +20,39 @@ export class RescheduleBookingDto {
   @IsDateString()
   newDate: string;
 
-  @ApiProperty({
-    description: 'New start time in HH:mm 24-hr format',
+  @ApiPropertyOptional({
+    description: 'New start time in HH:mm 24-hr format (optional if newTimeSlots provided)',
     example: '19:00',
   })
+  @IsOptional()
   @IsString()
   @Matches(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/, {
     message: 'newStartTime must be in HH:mm format',
   })
-  newStartTime: string;
+  newStartTime?: string;
 
-  @ApiProperty({
-    description: 'New end time in HH:mm 24-hr format',
+  @ApiPropertyOptional({
+    description: 'New end time in HH:mm 24-hr format (optional if newTimeSlots provided)',
     example: '20:00',
   })
+  @IsOptional()
   @IsString()
   @Matches(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/, {
     message: 'newEndTime must be in HH:mm format',
   })
-  newEndTime: string;
+  newEndTime?: string;
+
+  @ApiPropertyOptional({
+    description: 'Array of new time slots for multi-slot booking rescheduling',
+    type: [BookingTimeSlotDto],
+    example: [
+      { startTime: '19:00', endTime: '20:00', price: 1000 },
+      { startTime: '20:00', endTime: '21:00', price: 1000 },
+    ],
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => BookingTimeSlotDto)
+  newTimeSlots?: BookingTimeSlotDto[];
 }

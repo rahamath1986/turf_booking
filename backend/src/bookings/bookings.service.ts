@@ -19,6 +19,8 @@ import { CancelBookingDto } from './dto/cancel-booking.dto';
 import { RescheduleBookingDto } from './dto/reschedule-booking.dto';
 import { BookingQueryDto } from './dto/booking-query.dto';
 import { CalculateQuoteDto } from './dto/calculate-quote.dto';
+import { BookingTimeSlotDto } from './dto/booking-time-slot.dto';
+import { UpdateBookingDto } from './dto/update-booking.dto';
 import { Role } from '../common/enums/role.enum';
 
 export interface FeeBreakdownItem {
@@ -126,6 +128,120 @@ export class BookingsService {
     return d.toISOString().split('T')[0];
   }
 
+  private parseSlotMinutes(timeStr: string): number {
+    if (!timeStr) return 0;
+    const parts = timeStr.trim().split(':').map(Number);
+    const hours = parts[0] || 0;
+    const minutes = parts[1] || 0;
+    return hours * 60 + minutes;
+  }
+
+  private calculateDurationMinutes(startTime: string, endTime: string): number {
+    const startM = this.parseSlotMinutes(startTime);
+    let endM = this.parseSlotMinutes(endTime);
+    if ((endTime === '00:00' || endTime === '24:00') && startM > 0) {
+      endM = 24 * 60;
+    } else if (endM <= startM) {
+      endM += 24 * 60; // Handle midnight wrap
+    }
+    return Math.max(1, endM - startM);
+  }
+
+  private getTimeIntervals(startStr: string, endStr: string): Array<[number, number]> {
+    const start = this.parseSlotMinutes(startStr);
+    let end = this.parseSlotMinutes(endStr);
+
+    if ((endStr === '00:00' || endStr === '24:00') && start > 0) {
+      end = 24 * 60;
+    }
+
+    if (start === end) {
+      return [];
+    }
+
+    if (end > start) {
+      if (end <= 24 * 60) {
+        return [[start, end]];
+      } else {
+        return [
+          [start, 24 * 60],
+          [0, end % (24 * 60)],
+        ];
+      }
+    } else {
+      // Midnight wrap (e.g. 23:00 to 01:00 => [1380, 1440] and [0, 60])
+      return [
+        [start, 24 * 60],
+        [0, end],
+      ];
+    }
+  }
+
+  private isOverlapping(
+    sStart: string,
+    sEnd: string,
+    oStart: string,
+    oEnd: string,
+  ): boolean {
+    const intervals1 = this.getTimeIntervals(sStart, sEnd);
+    const intervals2 = this.getTimeIntervals(oStart, oEnd);
+
+    for (const [aStart, aEnd] of intervals1) {
+      for (const [bStart, bEnd] of intervals2) {
+        if (Math.max(aStart, bStart) < Math.min(aEnd, bEnd)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  private isSlotOverlappingWithBooking(
+    sStart: string,
+    sEnd: string,
+    booking: { startTime: string; endTime: string; timeSlots?: any },
+  ): boolean {
+    let slots = booking.timeSlots;
+    if (typeof slots === 'string') {
+      try {
+        slots = JSON.parse(slots);
+      } catch {
+        slots = null;
+      }
+    }
+    if (Array.isArray(slots) && slots.length > 0) {
+      return slots.some((ts: any) =>
+        ts?.startTime && ts?.endTime
+          ? this.isOverlapping(sStart, sEnd, ts.startTime, ts.endTime)
+          : false,
+      );
+    }
+    return this.isOverlapping(sStart, sEnd, booking.startTime, booking.endTime);
+  }
+
+  private isSlotOverlappingWithHold(
+    sStart: string,
+    sEnd: string,
+    hold: { startTime: string; endTime: string; timeSlots?: any },
+  ): boolean {
+    let slots = hold.timeSlots;
+    if (typeof slots === 'string') {
+      try {
+        slots = JSON.parse(slots);
+      } catch {
+        slots = null;
+      }
+    }
+    if (Array.isArray(slots) && slots.length > 0) {
+      return slots.some((ts: any) =>
+        ts?.startTime && ts?.endTime
+          ? this.isOverlapping(sStart, sEnd, ts.startTime, ts.endTime)
+          : false,
+      );
+    }
+    return this.isOverlapping(sStart, sEnd, hold.startTime, hold.endTime);
+  }
+
   /**
    * Lazily marks expired holds as EXPIRED and releases active_hold_key
    */
@@ -180,25 +296,44 @@ export class BookingsService {
     const targetDate = new Date(holdDateStr);
     const dayOfWeek = targetDate.getDay();
 
-    return this.prisma.$transaction(async (tx) => {
-      // 2. PostgreSQL Advisory Lock on (turfId + date + startTime)
-      const lockKey = `turf_slot_${dto.turfId}_${holdDateStr}_${dto.startTime}`;
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
+    const rawSlots =
+      dto.timeSlots && dto.timeSlots.length > 0
+        ? dto.timeSlots
+        : dto.startTime && dto.endTime
+          ? [{ startTime: dto.startTime, endTime: dto.endTime, price: undefined }]
+          : [];
 
-      // 3. Expire stale holds on this exact slot
-      await tx.slotHold.updateMany({
-        where: {
-          turfId: dto.turfId,
-          holdDate: targetDate,
-          startTime: dto.startTime,
-          status: HoldStatus.ACTIVE,
-          expiresAt: { lt: new Date() },
-        },
-        data: {
-          status: HoldStatus.EXPIRED,
-          activeHoldKey: null,
-        },
-      });
+    if (rawSlots.length === 0) {
+      throw new BadRequestException(
+        'Either startTime & endTime or timeSlots must be provided',
+      );
+    }
+
+    const sortedSlots = [...rawSlots].sort((a, b) =>
+      a.startTime.localeCompare(b.startTime),
+    );
+
+    return this.prisma.$transaction(async (tx) => {
+      // 2. PostgreSQL Advisory Lock on all requested slots
+      for (const slot of sortedSlots) {
+        const lockKey = `turf_slot_${dto.turfId}_${holdDateStr}_${slot.startTime}`;
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
+
+        // 3. Expire stale holds on this exact slot
+        await tx.slotHold.updateMany({
+          where: {
+            turfId: dto.turfId,
+            holdDate: targetDate,
+            startTime: slot.startTime,
+            status: HoldStatus.ACTIVE,
+            expiresAt: { lt: new Date() },
+          },
+          data: {
+            status: HoldStatus.EXPIRED,
+            activeHoldKey: null,
+          },
+        });
+      }
 
       // 4. Verify turf exists and is active
       const turf = await tx.turf.findFirst({
@@ -223,42 +358,32 @@ export class BookingsService {
         );
       }
 
-      // 6. Verify not blocked for maintenance or tournament
-      const isBlocked = turf.blockedSlots.some(
-        (b) => dto.startTime < b.endTime && dto.endTime > b.startTime,
-      );
-      if (isBlocked) {
-        throw new ConflictException(
-          'Slot is blocked for maintenance or venue hold',
+      // 6. Verify not blocked for maintenance or tournament for any slot
+      for (const slot of sortedSlots) {
+        const isBlocked = turf.blockedSlots.some(
+          (b) => slot.startTime < b.endTime && slot.endTime > b.startTime,
         );
+        if (isBlocked) {
+          throw new ConflictException(
+            `Slot ${slot.startTime} - ${slot.endTime} is blocked for maintenance or venue hold`,
+          );
+        }
       }
 
-      // 7. Check for conflicting ACTIVE hold
-      const activeHold = await tx.slotHold.findFirst({
+      // 7. Check for conflicting ACTIVE hold & active booking for any slot
+      const existingHolds = await tx.slotHold.findMany({
         where: {
           turfId: dto.turfId,
           holdDate: targetDate,
-          startTime: dto.startTime,
           status: HoldStatus.ACTIVE,
           expiresAt: { gt: new Date() },
         },
       });
 
-      if (activeHold) {
-        if (activeHold.userId === userId) {
-          return activeHold; // Re-use own active hold
-        }
-        throw new ConflictException(
-          'This timeslot is temporarily held by another customer. Please choose another slot or try again shortly.',
-        );
-      }
-
-      // 8. Check for conflicting CONFIRMED / PENDING booking
-      const activeBooking = await tx.booking.findFirst({
+      const existingBookings = await tx.booking.findMany({
         where: {
           turfId: dto.turfId,
           bookingDate: targetDate,
-          startTime: dto.startTime,
           status: {
             in: [
               BookingStatus.CONFIRMED,
@@ -269,11 +394,34 @@ export class BookingsService {
         },
       });
 
-      if (activeBooking) {
-        throw new ConflictException('This timeslot has already been booked');
+      for (const slot of sortedSlots) {
+        const conflictingHold = existingHolds.find((h) =>
+          this.isSlotOverlappingWithHold(slot.startTime, slot.endTime, h),
+        );
+
+        if (conflictingHold) {
+          if (conflictingHold.userId === userId && sortedSlots.length === 1) {
+            return conflictingHold; // Re-use own active hold if single slot
+          }
+          if (conflictingHold.userId !== userId) {
+            throw new ConflictException(
+              `Timeslot ${slot.startTime} - ${slot.endTime} is temporarily held by another customer. Please choose another slot or try again shortly.`,
+            );
+          }
+        }
+
+        const conflictingBooking = existingBookings.find((b) =>
+          this.isSlotOverlappingWithBooking(slot.startTime, slot.endTime, b),
+        );
+
+        if (conflictingBooking) {
+          throw new ConflictException(
+            `Timeslot ${slot.startTime} - ${slot.endTime} has already been booked`,
+          );
+        }
       }
 
-      // 9. Calculate slot price
+      // 8. Calculate slot prices from availability
       const slotsOverview = await this.availabilityService.getAvailableSlots(
         dto.turfId,
         {
@@ -282,15 +430,35 @@ export class BookingsService {
         },
       );
 
-      const matchedSlot = slotsOverview.slots.find(
-        (s) => s.startTime === dto.startTime,
-      );
-      const calculatedPrice = matchedSlot ? matchedSlot.price : 1000;
+      let totalCalculatedPrice = 0;
+      const holdSlots: { startTime: string; endTime: string; price: number; durationMinutes: number }[] = [];
 
-      // 10. Create the SlotHold with 10-minute TTL
+      for (const slot of sortedSlots) {
+        const matchedSlot = slotsOverview.slots.find(
+          (s) => s.startTime === slot.startTime,
+        );
+        const slotPrice = slot.price ?? (matchedSlot ? matchedSlot.price : 1000);
+        const slotDuration = this.calculateDurationMinutes(
+          slot.startTime,
+          slot.endTime,
+        );
+
+        holdSlots.push({
+          startTime: slot.startTime,
+          endTime: slot.endTime,
+          price: slotPrice,
+          durationMinutes: slotDuration,
+        });
+
+        totalCalculatedPrice += slotPrice;
+      }
+
+      // 9. Create the SlotHold with 10-minute TTL
       const ttlMinutes = 10;
       const expiresAt = new Date(Date.now() + ttlMinutes * 60 * 1000);
-      const activeHoldKey = `${dto.turfId}_${holdDateStr}_${dto.startTime}`;
+      const earliestStart = sortedSlots[0].startTime;
+      const latestEnd = sortedSlots[sortedSlots.length - 1].endTime;
+      const activeHoldKey = `${dto.turfId}_${holdDateStr}_${sortedSlots.map((s) => s.startTime).join('_')}`.slice(0, 120);
 
       const hold = await tx.slotHold.create({
         data: {
@@ -299,20 +467,22 @@ export class BookingsService {
           turfId: dto.turfId,
           sportId: dto.sportId ?? null,
           holdDate: targetDate,
-          startTime: dto.startTime,
-          endTime: dto.endTime,
+          startTime: earliestStart,
+          endTime: latestEnd,
+          timeSlots: holdSlots,
           expiresAt,
           status: HoldStatus.ACTIVE,
-          totalPrice: calculatedPrice,
+          totalPrice: totalCalculatedPrice,
           idempotencyKey: dto.idempotencyKey ?? null,
           activeHoldKey,
-        },
+        } as any,
       });
 
-      const feeBreakdown = this.calculateFeeBreakdown(calculatedPrice);
+      const feeBreakdown = this.calculateFeeBreakdown(totalCalculatedPrice);
 
       return {
         ...hold,
+        timeSlots: holdSlots,
         feeBreakdown,
       };
     });
@@ -434,6 +604,8 @@ export class BookingsService {
       let totalPrice = 1000;
       let slotHoldId: string | null = null;
 
+      let bookingSlots: { startTime: string; endTime: string; price: number; durationMinutes: number }[] = [];
+
       // FLOW A: Booking from active SlotHold
       if (dto.holdId) {
         slotHoldId = dto.holdId;
@@ -470,9 +642,28 @@ export class BookingsService {
         sportId = hold.sportId ?? undefined;
         totalPrice = Number(hold.totalPrice);
 
-        // Acquire advisory lock
-        const lockKey = `turf_slot_${turfId}_${bookingDateStr}_${startTime}`;
-        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
+        const holdTimeSlots = (hold as any).timeSlots;
+        if (Array.isArray(holdTimeSlots) && holdTimeSlots.length > 0) {
+          bookingSlots = holdTimeSlots as any;
+        } else {
+          bookingSlots = [
+            {
+              startTime: hold.startTime,
+              endTime: hold.endTime,
+              price: Number(hold.totalPrice),
+              durationMinutes: this.calculateDurationMinutes(
+                hold.startTime,
+                hold.endTime,
+              ),
+            },
+          ];
+        }
+
+        // Acquire advisory lock on each slot
+        for (const slot of bookingSlots) {
+          const lockKey = `turf_slot_${turfId}_${bookingDateStr}_${slot.startTime}`;
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
+        }
 
         // Mark hold CONVERTED
         await tx.slotHold.update({
@@ -483,35 +674,28 @@ export class BookingsService {
           },
         });
       } else {
-        // FLOW B: Direct Booking (requires turfId, bookingDate, startTime, endTime)
-        if (!turfId || !bookingDateStr || !startTime || !endTime) {
+        // FLOW B: Direct Booking (requires turfId, bookingDate, and startTime/endTime or timeSlots)
+        const rawSlots =
+          dto.timeSlots && dto.timeSlots.length > 0
+            ? dto.timeSlots
+            : dto.startTime && dto.endTime
+              ? [{ startTime: dto.startTime, endTime: dto.endTime, price: undefined }]
+              : [];
+
+        if (!turfId || !bookingDateStr || rawSlots.length === 0) {
           throw new BadRequestException(
-            'Either holdId or complete slot details (turfId, bookingDate, startTime, endTime) must be provided',
+            'Either holdId or complete slot details (turfId, bookingDate, and startTime/endTime or timeSlots) must be provided',
           );
         }
 
-        // Acquire advisory lock
-        const lockKey = `turf_slot_${turfId}_${bookingDateStr}_${startTime}`;
-        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
+        const sortedSlots = [...rawSlots].sort((a, b) =>
+          a.startTime.localeCompare(b.startTime),
+        );
 
-        // Check active hold by another user
-        const activeHold = await tx.slotHold.findFirst({
-          where: {
-            turfId,
-            holdDate: new Date(bookingDateStr),
-            startTime,
-            status: HoldStatus.ACTIVE,
-            expiresAt: { gt: new Date() },
-          },
-        });
+        startTime = sortedSlots[0].startTime;
+        endTime = sortedSlots[sortedSlots.length - 1].endTime;
 
-        if (activeHold && activeHold.userId !== userId) {
-          throw new ConflictException(
-            'This timeslot is temporarily held by another customer. Please choose another slot.',
-          );
-        }
-
-        // Calculate dynamic price
+        // Fetch dynamic pricing
         const slotsOverview = await this.availabilityService.getAvailableSlots(
           turfId,
           {
@@ -520,24 +704,78 @@ export class BookingsService {
           },
         );
 
-        const matchedSlot = slotsOverview.slots.find(
-          (s) => s.startTime === startTime,
-        );
-        if (!matchedSlot || !matchedSlot.isAvailable) {
-          throw new ConflictException(
-            'This timeslot is not available for booking',
+        const existingHolds = await tx.slotHold.findMany({
+          where: {
+            turfId,
+            holdDate: new Date(bookingDateStr),
+            status: HoldStatus.ACTIVE,
+            expiresAt: { gt: new Date() },
+          },
+        });
+
+        totalPrice = 0;
+        for (const slot of sortedSlots) {
+          // Acquire advisory lock
+          const lockKey = `turf_slot_${turfId}_${bookingDateStr}_${slot.startTime}`;
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
+
+          // Check active hold by another customer
+          const conflictingHold = existingHolds.find(
+            (h) =>
+              h.userId !== userId &&
+              this.isSlotOverlappingWithHold(slot.startTime, slot.endTime, h),
           );
+
+          if (conflictingHold) {
+            throw new ConflictException(
+              `Timeslot ${slot.startTime} - ${slot.endTime} is temporarily held by another customer. Please choose another slot.`,
+            );
+          }
+
+          // Calculate dynamic price & availability
+          const matchedSlot = slotsOverview.slots.find(
+            (s) => s.startTime === slot.startTime,
+          );
+          if (matchedSlot && !matchedSlot.isAvailable) {
+            throw new ConflictException(
+              `Timeslot ${slot.startTime} is not available for booking`,
+            );
+          }
+
+          const overlappingUnavailable = slotsOverview.slots.some(
+            (s) =>
+              !s.isAvailable &&
+              this.isOverlapping(slot.startTime, slot.endTime, s.startTime, s.endTime),
+          );
+          if (overlappingUnavailable) {
+            throw new ConflictException(
+              `Timeslot ${slot.startTime} - ${slot.endTime} is not available for booking`,
+            );
+          }
+
+          const slotPrice = slot.price ?? (matchedSlot ? matchedSlot.price : 1000);
+          const slotDuration = this.calculateDurationMinutes(
+            slot.startTime,
+            slot.endTime,
+          );
+
+          bookingSlots.push({
+            startTime: slot.startTime,
+            endTime: slot.endTime,
+            price: slotPrice,
+            durationMinutes: slotDuration,
+          });
+
+          totalPrice += slotPrice;
         }
-        totalPrice = matchedSlot.price;
       }
 
-      // Check for duplicate active booking
+      // Check for duplicate active booking for any of the slots
       const targetDate = new Date(bookingDateStr);
-      const existingActiveBooking = await tx.booking.findFirst({
+      const existingActiveBookings = await tx.booking.findMany({
         where: {
           turfId: turfId,
           bookingDate: targetDate,
-          startTime: startTime,
           status: {
             in: [
               BookingStatus.CONFIRMED,
@@ -548,10 +786,16 @@ export class BookingsService {
         },
       });
 
-      if (existingActiveBooking) {
-        throw new ConflictException(
-          'Slot has already been booked. Two confirmed bookings cannot share the same turf slot.',
+      for (const slot of bookingSlots) {
+        const conflictingBooking = existingActiveBookings.find((b) =>
+          this.isSlotOverlappingWithBooking(slot.startTime, slot.endTime, b),
         );
+
+        if (conflictingBooking) {
+          throw new ConflictException(
+            `Slot ${slot.startTime} - ${slot.endTime} has already been booked. Two confirmed bookings cannot share the same turf slot.`,
+          );
+        }
       }
 
       let discountAmount = 0;
@@ -580,7 +824,12 @@ export class BookingsService {
         dto.customFeeItems,
       );
 
-      const activeSlotKey = `${turfId}_${bookingDateStr}_${startTime}`;
+      const totalDurationMinutes = bookingSlots.reduce(
+        (sum, s) => sum + (s.durationMinutes || 60),
+        0,
+      );
+
+      const activeSlotKey = `${turfId}_${bookingDateStr}_${bookingSlots.map((s) => s.startTime).join('_')}`.slice(0, 120);
       const bookingNumber = this.generateBookingNumber();
 
       const booking = await tx.booking.create({
@@ -593,6 +842,8 @@ export class BookingsService {
           bookingDate: targetDate,
           startTime: startTime,
           endTime: endTime,
+          durationMinutes: totalDurationMinutes,
+          timeSlots: bookingSlots,
           status: BookingStatus.CONFIRMED,
           activeSlotKey,
           idempotencyKey: dto.idempotencyKey ?? null,
@@ -600,7 +851,7 @@ export class BookingsService {
           taxAmount: feeBreakdown.taxAmount,
           discountAmount: feeBreakdown.discountAmount,
           totalPrice: feeBreakdown.totalAmount,
-        },
+        } as any,
         include: {
           turf: {
             select: {
@@ -644,6 +895,7 @@ export class BookingsService {
 
       return {
         ...booking,
+        timeSlots: bookingSlots,
         qrCodeDataUrl,
         paymentMethod: 'UPI',
         paymentStatus: 'PAID',
@@ -662,8 +914,9 @@ export class BookingsService {
     let startTime = dto.startTime;
     let endTime = dto.endTime;
     let sportId = dto.sportId;
-    let basePrice = 1000;
+    let basePrice = 0;
     let holdRecord: any = null;
+    let quoteSlots: { startTime: string; endTime: string; price: number; durationMinutes: number }[] = [];
 
     if (dto.holdId) {
       const hold = await this.prisma.slotHold.findUnique({
@@ -693,10 +946,33 @@ export class BookingsService {
       sportId = hold.sportId ?? undefined;
       basePrice = Number(hold.totalPrice);
       holdRecord = hold;
+
+      if (Array.isArray(hold.timeSlots) && hold.timeSlots.length > 0) {
+        quoteSlots = hold.timeSlots as any;
+      } else {
+        quoteSlots = [
+          {
+            startTime: hold.startTime,
+            endTime: hold.endTime,
+            price: Number(hold.totalPrice),
+            durationMinutes: this.calculateDurationMinutes(
+              hold.startTime,
+              hold.endTime,
+            ),
+          },
+        ];
+      }
     } else {
-      if (!turfId || !targetDateStr || !startTime) {
+      const rawSlots =
+        dto.timeSlots && dto.timeSlots.length > 0
+          ? dto.timeSlots
+          : dto.startTime && dto.endTime
+            ? [{ startTime: dto.startTime, endTime: dto.endTime, price: undefined }]
+            : [];
+
+      if (!turfId || !targetDateStr || rawSlots.length === 0) {
         throw new BadRequestException(
-          'Either holdId or (turfId, date/bookingDate, startTime) must be provided',
+          'Either holdId or (turfId, date/bookingDate, and startTime/endTime or timeSlots) must be provided',
         );
       }
 
@@ -716,11 +992,32 @@ export class BookingsService {
         },
       );
 
-      const matchedSlot = slotsOverview.slots.find(
-        (s) => s.startTime === startTime,
+      const sortedSlots = [...rawSlots].sort((a, b) =>
+        a.startTime.localeCompare(b.startTime),
       );
 
-      basePrice = matchedSlot ? matchedSlot.price : 1000;
+      startTime = sortedSlots[0].startTime;
+      endTime = sortedSlots[sortedSlots.length - 1].endTime;
+
+      for (const slot of sortedSlots) {
+        const matchedSlot = slotsOverview.slots.find(
+          (s) => s.startTime === slot.startTime,
+        );
+        const slotPrice = slot.price ?? (matchedSlot ? matchedSlot.price : 1000);
+        const slotDuration = this.calculateDurationMinutes(
+          slot.startTime,
+          slot.endTime,
+        );
+
+        quoteSlots.push({
+          startTime: slot.startTime,
+          endTime: slot.endTime,
+          price: slotPrice,
+          durationMinutes: slotDuration,
+        });
+
+        basePrice += slotPrice;
+      }
     }
 
     // Coupon discount calculation if couponCode provided
@@ -777,6 +1074,7 @@ export class BookingsService {
       sportId,
       holdId: dto.holdId ?? null,
       holdExpiresAt: holdRecord ? holdRecord.expiresAt : null,
+      timeSlots: quoteSlots,
       coupon: couponDetails,
       feeBreakdown,
     };
@@ -1089,34 +1387,42 @@ export class BookingsService {
     }
 
     const newTargetDate = new Date(dto.newDate);
-    const newLockKey = `turf_slot_${booking.turfId}_${dto.newDate}_${dto.newStartTime}`;
+
+    const rawSlots =
+      dto.newTimeSlots && dto.newTimeSlots.length > 0
+        ? dto.newTimeSlots
+        : dto.newStartTime && dto.newEndTime
+          ? [{ startTime: dto.newStartTime, endTime: dto.newEndTime, price: undefined }]
+          : [];
+
+    if (rawSlots.length === 0) {
+      throw new BadRequestException(
+        'Either newStartTime & newEndTime or newTimeSlots must be provided',
+      );
+    }
+
+    const sortedSlots = [...rawSlots].sort((a, b) =>
+      a.startTime.localeCompare(b.startTime),
+    );
+
+    const newStartTime = sortedSlots[0].startTime;
+    const newEndTime = sortedSlots[sortedSlots.length - 1].endTime;
 
     return this.prisma.$transaction(async (tx) => {
-      // 1. Acquire advisory lock on new target slot
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${newLockKey}))`;
-
-      // 2. Check availability on new slot
-      const existingHold = await tx.slotHold.findFirst({
+      // 1. Acquire advisory lock and check conflicts on all new target slots
+      const existingHolds = await tx.slotHold.findMany({
         where: {
           turfId: booking.turfId,
           holdDate: newTargetDate,
-          startTime: dto.newStartTime,
           status: HoldStatus.ACTIVE,
           expiresAt: { gt: new Date() },
         },
       });
 
-      if (existingHold) {
-        throw new ConflictException(
-          'New requested slot is temporarily held by another customer',
-        );
-      }
-
-      const existingBooking = await tx.booking.findFirst({
+      const existingBookings = await tx.booking.findMany({
         where: {
           turfId: booking.turfId,
           bookingDate: newTargetDate,
-          startTime: dto.newStartTime,
           status: {
             in: [
               BookingStatus.CONFIRMED,
@@ -1127,24 +1433,55 @@ export class BookingsService {
         },
       });
 
-      if (existingBooking) {
-        throw new ConflictException('New requested slot is already booked');
+      for (const slot of sortedSlots) {
+        const newLockKey = `turf_slot_${booking.turfId}_${dto.newDate}_${slot.startTime}`;
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${newLockKey}))`;
+
+        const conflictingHold = existingHolds.find((h) =>
+          this.isSlotOverlappingWithHold(slot.startTime, slot.endTime, h),
+        );
+
+        if (conflictingHold) {
+          throw new ConflictException(
+            `New requested slot ${slot.startTime} - ${slot.endTime} is temporarily held by another customer`,
+          );
+        }
+
+        const conflictingBooking = existingBookings.find(
+          (b) =>
+            b.id !== id &&
+            this.isSlotOverlappingWithBooking(slot.startTime, slot.endTime, b),
+        );
+
+        if (conflictingBooking) {
+          throw new ConflictException(
+            `New requested slot ${slot.startTime} - ${slot.endTime} is already booked`,
+          );
+        }
       }
 
-      // 3. Free old slot key and assign new slot key
-      const newActiveSlotKey = `${booking.turfId}_${dto.newDate}_${dto.newStartTime}`;
+      // 2. Free old slot key and assign new slot key
+      const newActiveSlotKey = `${booking.turfId}_${dto.newDate}_${sortedSlots.map((s) => s.startTime).join('_')}`.slice(0, 120);
+
+      const totalDurationMinutes = sortedSlots.reduce(
+        (sum, s) =>
+          sum + (s.durationMinutes || this.calculateDurationMinutes(s.startTime, s.endTime)),
+        0,
+      );
 
       const updated = await tx.booking.update({
         where: { id },
         data: {
           bookingDate: newTargetDate,
-          startTime: dto.newStartTime,
-          endTime: dto.newEndTime,
+          startTime: newStartTime,
+          endTime: newEndTime,
+          durationMinutes: totalDurationMinutes,
+          timeSlots: sortedSlots,
           activeSlotKey: newActiveSlotKey,
-        },
+        } as any,
       });
 
-      // 4. Record auditable transition
+      // 3. Record auditable transition
       const oldDateStr = this.formatDateIso(booking.bookingDate);
       await tx.bookingStatusHistory.create({
         data: {
@@ -1155,6 +1492,225 @@ export class BookingsService {
           changedByUserId: userId,
         },
       });
+
+      return updated;
+    });
+  }
+
+  /**
+   * PUT/PATCH /api/v1/bookings/:id
+   * Edit or update booking details (schedule/slots, sportId, status, notes).
+   * Checks authorization, advisory locks new slots, verifies no overlaps, updates booking, and logs history.
+   */
+  async updateBooking(
+    userId: string,
+    userRoles: string[],
+    id: string,
+    dto: UpdateBookingDto,
+  ) {
+    const booking = await this.prisma.booking.findUnique({
+      where: { id },
+      include: {
+        turf: {
+          include: { owner: true },
+        },
+      },
+    });
+
+    if (!booking) {
+      throw new NotFoundException(`Booking with ID "${id}" not found`);
+    }
+
+    const isPlatformAdmin =
+      userRoles.includes(Role.SUPER_ADMIN) || userRoles.includes(Role.ADMIN);
+    const isTurfOwner = booking.turf.owner.userId === userId;
+    const isBookingCustomer = booking.userId === userId;
+
+    if (!isPlatformAdmin && !isTurfOwner && !isBookingCustomer) {
+      throw new ForbiddenException(
+        'You are not authorized to update this booking',
+      );
+    }
+
+    // Only platform admin or turf owner can change booking status
+    if (dto.status !== undefined && dto.status !== booking.status) {
+      if (!isPlatformAdmin && !isTurfOwner) {
+        throw new ForbiddenException(
+          'Only turf owners or platform administrators can update booking status directly',
+        );
+      }
+    }
+
+    const isScheduleChanging =
+      dto.bookingDate !== undefined ||
+      dto.startTime !== undefined ||
+      dto.endTime !== undefined ||
+      (dto.timeSlots !== undefined && dto.timeSlots.length > 0);
+
+    const targetDateStr =
+      dto.bookingDate || this.formatDateIso(booking.bookingDate);
+    const targetDate = new Date(targetDateStr);
+
+    let rawSlots: BookingTimeSlotDto[] = [];
+    if (dto.timeSlots && dto.timeSlots.length > 0) {
+      rawSlots = dto.timeSlots;
+    } else if (dto.startTime && dto.endTime) {
+      rawSlots = [
+        { startTime: dto.startTime, endTime: dto.endTime, price: undefined },
+      ];
+    } else if (dto.startTime && !dto.endTime) {
+      rawSlots = [
+        { startTime: dto.startTime, endTime: booking.endTime, price: undefined },
+      ];
+    } else if (dto.endTime && !dto.startTime) {
+      rawSlots = [
+        { startTime: booking.startTime, endTime: dto.endTime, price: undefined },
+      ];
+    } else if (dto.bookingDate && !dto.startTime && !dto.endTime) {
+      if (Array.isArray(booking.timeSlots) && booking.timeSlots.length > 0) {
+        rawSlots = booking.timeSlots as any;
+      } else {
+        rawSlots = [
+          { startTime: booking.startTime, endTime: booking.endTime, price: undefined },
+        ];
+      }
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      let updateData: any = {};
+
+      if (dto.sportId !== undefined) {
+        updateData.sport = dto.sportId
+          ? { connect: { id: dto.sportId } }
+          : { disconnect: true };
+      }
+
+      if (dto.status !== undefined && dto.status !== booking.status) {
+        updateData.status = dto.status;
+        if (
+          dto.status === BookingStatus.CANCELLED ||
+          dto.status === BookingStatus.COMPLETED ||
+          dto.status === BookingStatus.NO_SHOW ||
+          dto.status === BookingStatus.EXPIRED
+        ) {
+          updateData.activeSlotKey = null;
+        }
+      }
+
+      if (isScheduleChanging && rawSlots.length > 0) {
+        const sortedSlots = [...rawSlots].sort((a, b) =>
+          a.startTime.localeCompare(b.startTime),
+        );
+
+        const newStartTime = sortedSlots[0].startTime;
+        const newEndTime = sortedSlots[sortedSlots.length - 1].endTime;
+
+        // Advisory locking & range overlap verification on target slots
+        const existingHolds = await tx.slotHold.findMany({
+          where: {
+            turfId: booking.turfId,
+            holdDate: targetDate,
+            status: HoldStatus.ACTIVE,
+            expiresAt: { gt: new Date() },
+          },
+        });
+
+        const existingBookings = await tx.booking.findMany({
+          where: {
+            turfId: booking.turfId,
+            bookingDate: targetDate,
+            status: {
+              in: [
+                BookingStatus.CONFIRMED,
+                BookingStatus.PENDING,
+                BookingStatus.PAYMENT_PENDING,
+              ],
+            },
+          },
+        });
+
+        for (const slot of sortedSlots) {
+          const newLockKey = `turf_slot_${booking.turfId}_${targetDateStr}_${slot.startTime}`;
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${newLockKey}))`;
+
+          const conflictingHold = existingHolds.find((h) =>
+            this.isSlotOverlappingWithHold(slot.startTime, slot.endTime, h),
+          );
+
+          if (conflictingHold) {
+            throw new ConflictException(
+              `Requested slot ${slot.startTime} - ${slot.endTime} is temporarily held by another customer`,
+            );
+          }
+
+          const conflictingBooking = existingBookings.find(
+            (b) =>
+              b.id !== id &&
+              this.isSlotOverlappingWithBooking(slot.startTime, slot.endTime, b),
+          );
+
+          if (conflictingBooking) {
+            throw new ConflictException(
+              `Requested slot ${slot.startTime} - ${slot.endTime} is already booked`,
+            );
+          }
+        }
+
+        const newActiveSlotKey = `${booking.turfId}_${targetDateStr}_${sortedSlots.map((s) => s.startTime).join('_')}`.slice(0, 120);
+
+        const totalDurationMinutes = sortedSlots.reduce(
+          (sum, s) =>
+            sum +
+            (s.durationMinutes ||
+              this.calculateDurationMinutes(s.startTime, s.endTime)),
+          0,
+        );
+
+        updateData = {
+          ...updateData,
+          bookingDate: targetDate,
+          startTime: newStartTime,
+          endTime: newEndTime,
+          durationMinutes: totalDurationMinutes,
+          timeSlots: sortedSlots,
+          activeSlotKey:
+            updateData.status &&
+            (updateData.status === BookingStatus.CANCELLED ||
+              updateData.status === BookingStatus.COMPLETED ||
+              updateData.status === BookingStatus.NO_SHOW)
+              ? null
+              : newActiveSlotKey,
+        };
+      }
+
+      const updated = await tx.booking.update({
+        where: { id },
+        data: updateData,
+        include: {
+          turf: true,
+          sport: true,
+          user: {
+            select: { id: true, fullName: true, email: true, phone: true },
+          },
+        },
+      });
+
+      // Status history entry if status or schedule changed
+      if (dto.status !== undefined || isScheduleChanging || dto.reason) {
+        await tx.bookingStatusHistory.create({
+          data: {
+            bookingId: id,
+            fromStatus: booking.status,
+            toStatus: (updateData.status as BookingStatus) || booking.status,
+            reason:
+              dto.reason ||
+              (isScheduleChanging
+                ? `Booking schedule updated to ${targetDateStr} ${updated.startTime} - ${updated.endTime}`
+                : `Booking updated`),
+            changedByUserId: userId,
+          },
+        });
+      }
 
       return updated;
     });

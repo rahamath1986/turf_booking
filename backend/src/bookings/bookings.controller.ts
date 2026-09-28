@@ -5,7 +5,9 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  Patch,
   Post,
+  Put,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -21,6 +23,7 @@ import { CancelBookingDto } from './dto/cancel-booking.dto';
 import { RescheduleBookingDto } from './dto/reschedule-booking.dto';
 import { BookingQueryDto } from './dto/booking-query.dto';
 import { CalculateQuoteDto } from './dto/calculate-quote.dto';
+import { UpdateBookingDto } from './dto/update-booking.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 
@@ -199,5 +202,45 @@ export class BookingsController {
     @Body() dto: RescheduleBookingDto,
   ) {
     return this.bookingsService.rescheduleBooking(userId, userRoles, id, dto);
+  }
+
+  @Patch(':id')
+  @ApiOperation({
+    summary: 'Edit or update booking details (slots, date, sport, or status)',
+    description:
+      'Partially updates booking details. If schedule/slots are modified, verifies range-overlap availability and locks new slots.',
+  })
+  @ApiResponse({ status: 200, description: 'Booking updated successfully' })
+  @ApiResponse({
+    status: 409,
+    description: 'Conflict: Target slot is already booked or held by another customer',
+  })
+  updateBooking(
+    @CurrentUser('userId') userId: string,
+    @CurrentUser('roles') userRoles: string[],
+    @Param('id') id: string,
+    @Body() dto: UpdateBookingDto,
+  ) {
+    return this.bookingsService.updateBooking(userId, userRoles, id, dto);
+  }
+
+  @Put(':id')
+  @ApiOperation({
+    summary: 'Edit or replace booking details',
+    description:
+      'Updates booking details. If schedule/slots are modified, verifies range-overlap availability and locks new slots.',
+  })
+  @ApiResponse({ status: 200, description: 'Booking updated successfully' })
+  @ApiResponse({
+    status: 409,
+    description: 'Conflict: Target slot is already booked or held by another customer',
+  })
+  replaceBooking(
+    @CurrentUser('userId') userId: string,
+    @CurrentUser('roles') userRoles: string[],
+    @Param('id') id: string,
+    @Body() dto: UpdateBookingDto,
+  ) {
+    return this.bookingsService.updateBooking(userId, userRoles, id, dto);
   }
 }

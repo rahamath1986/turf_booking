@@ -16,6 +16,7 @@ describe('AvailabilityService', () => {
     id: 'turf-uuid-1',
     name: 'Champions Football Turf',
     ownerId: 'owner-profile-1',
+    slotDurationMinutes: 60,
     owner: {
       id: 'owner-profile-1',
       userId: 'owner-user-1',
@@ -101,10 +102,16 @@ describe('AvailabilityService', () => {
       deleteMany: jest.fn(),
     },
     blockedSlot: {
-      findMany: jest.fn(),
+      findMany: jest.fn().mockResolvedValue([]),
       findFirst: jest.fn(),
       create: jest.fn(),
       delete: jest.fn(),
+    },
+    booking: {
+      findMany: jest.fn().mockResolvedValue([]),
+    },
+    slotHold: {
+      findMany: jest.fn().mockResolvedValue([]),
     },
     $transaction: jest.fn().mockImplementation((cb) => cb(mockPrismaService)),
   };
@@ -232,6 +239,129 @@ describe('AvailabilityService', () => {
       expect(slot16?.isAvailable).toBe(true);
       expect(slot16?.status).toBe('AVAILABLE');
       expect(slot16?.blockReason).toBeNull();
+    });
+
+    it('6. booked & held slots: should mark multi-slot booked times as BLOCKED with reason Booked', async () => {
+      mockPrismaService.turf.findFirst.mockResolvedValue(mockTurf);
+      mockPrismaService.blockedSlot.findMany.mockResolvedValue([]);
+      mockPrismaService.booking.findMany.mockResolvedValue([
+        {
+          startTime: '18:00',
+          endTime: '20:00',
+          timeSlots: [
+            { startTime: '18:00', endTime: '19:00', price: 1000 },
+            { startTime: '19:00', endTime: '20:00', price: 1000 },
+          ],
+        },
+      ]);
+      mockPrismaService.slotHold.findMany.mockResolvedValue([
+        {
+          startTime: '20:00',
+          endTime: '21:00',
+          timeSlots: null,
+        },
+      ]);
+
+      const result = await service.getAvailableSlots('turf-uuid-1', {
+        date: '2026-09-23',
+      });
+
+      const slot18 = result.slots.find((s) => s.startTime === '18:00');
+      const slot19 = result.slots.find((s) => s.startTime === '19:00');
+      const slot20 = result.slots.find((s) => s.startTime === '20:00');
+      const slot21 = result.slots.find((s) => s.startTime === '21:00');
+
+      expect(slot18?.isAvailable).toBe(false);
+      expect(slot18?.status).toBe('BOOKED');
+      expect(slot18?.isBooked).toBe(true);
+      expect(slot18?.blockReason).toBe('Booked');
+
+      expect(slot19?.isAvailable).toBe(false);
+      expect(slot19?.status).toBe('BOOKED');
+      expect(slot19?.isBooked).toBe(true);
+      expect(slot19?.blockReason).toBe('Booked');
+
+      expect(slot20?.isAvailable).toBe(false);
+      expect(slot20?.status).toBe('HELD');
+      expect(slot20?.isBooked).toBe(true);
+      expect(slot20?.blockReason).toBe('Temporarily Held');
+
+      expect(slot21?.isAvailable).toBe(true);
+      expect(slot21?.status).toBe('AVAILABLE');
+      expect(slot21?.isBooked).toBe(false);
+    });
+
+    it('7. default 2hr slots: open from 06:00 to 22:00, last slot starts at 20:00 (8:00 PM), and booked slot marked correctly', async () => {
+      const turfWith2HrSlots = {
+        ...mockTurf,
+        openTime: '06:00',
+        closeTime: '22:00',
+        slotDurationMinutes: 120,
+        operatingHours: [
+          {
+            id: 'oh-wednesday-2hr',
+            turfId: 'turf-uuid-1',
+            dayOfWeek: 3,
+            openTime: '06:00',
+            closeTime: '22:00',
+            slotDurationMinutes: 120,
+            isClosed: false,
+          },
+        ],
+      };
+
+      mockPrismaService.turf.findFirst.mockResolvedValue(turfWith2HrSlots);
+      mockPrismaService.blockedSlot.findMany.mockResolvedValue([]);
+      // Book the 18:00 to 20:00 slot
+      mockPrismaService.booking.findMany.mockResolvedValue([
+        {
+          startTime: '18:00',
+          endTime: '20:00',
+          timeSlots: [
+            { startTime: '18:00', endTime: '20:00', price: 2000, durationMinutes: 120 },
+          ],
+        },
+      ]);
+      mockPrismaService.slotHold.findMany.mockResolvedValue([]);
+
+      const result = await service.getAvailableSlots('turf-uuid-1', {
+        date: '2026-09-23',
+      });
+
+      expect(result.openTime).toBe('06:00');
+      expect(result.closeTime).toBe('22:00');
+      expect(result.slotDurationMinutes).toBe(120);
+      expect(result.totalSlots).toBe(8); // (22 - 6) / 2 = 8 slots: 06:00, 08:00, 10:00, 12:00, 14:00, 16:00, 18:00, 20:00
+
+      const slotStarts = result.slots.map((s) => s.startTime);
+      expect(slotStarts).toEqual([
+        '06:00',
+        '08:00',
+        '10:00',
+        '12:00',
+        '14:00',
+        '16:00',
+        '18:00',
+        '20:00',
+      ]);
+
+      // Last slot starts at 20:00 (8:00 PM) and ends at 22:00 (10:00 PM)
+      const lastSlot = result.slots[result.slots.length - 1];
+      expect(lastSlot.startTime).toBe('20:00');
+      expect(lastSlot.endTime).toBe('22:00');
+      expect(lastSlot.durationMinutes).toBe(120);
+
+      // Booked slot 18:00 - 20:00
+      const bookedSlot = result.slots.find((s) => s.startTime === '18:00');
+      expect(bookedSlot?.isAvailable).toBe(false);
+      expect(bookedSlot?.status).toBe('BOOKED');
+      expect(bookedSlot?.isBooked).toBe(true);
+      expect(bookedSlot?.blockReason).toBe('Booked');
+
+      // Available slot 20:00 - 22:00
+      expect(lastSlot.isAvailable).toBe(true);
+      expect(lastSlot.status).toBe('AVAILABLE');
+      expect(lastSlot.isBooked).toBe(false);
     });
   });
 

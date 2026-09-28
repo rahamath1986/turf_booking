@@ -11,6 +11,7 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
+import { BookingTimeSlotDto } from './booking-time-slot.dto';
 
 export class CustomFeeItemDto {
   @ApiPropertyOptional({
@@ -83,6 +84,20 @@ export class CalculateQuoteDto {
     message: 'endTime must be in HH:mm format',
   })
   endTime?: string;
+
+  @ApiPropertyOptional({
+    description: 'Array of time slots for multi-slot quote calculation',
+    type: [BookingTimeSlotDto],
+    example: [
+      { startTime: '18:00', endTime: '19:00', price: 1000 },
+      { startTime: '19:00', endTime: '20:00', price: 1000 },
+    ],
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => BookingTimeSlotDto)
+  timeSlots?: BookingTimeSlotDto[];
 
   @ApiPropertyOptional({
     description: 'Sport UUID for sport-specific pricing',

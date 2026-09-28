@@ -724,6 +724,9 @@ export class TurfsService {
           coverImageUrl: dto.coverImageUrl || null,
           rules: dto.rules || null,
           cancellationPolicy: dto.cancellationPolicy || null,
+          openTime: dto.openTime || '06:00',
+          closeTime: dto.closeTime || '22:00',
+          slotDurationMinutes: dto.slotDurationMinutes ?? 120,
           isActive: true,
           // Platform admins can auto-approve; owners start pending
           isApproved: isPlatformAdmin,
@@ -763,8 +766,26 @@ export class TurfsService {
             dayOfWeek: oh.dayOfWeek,
             openTime: oh.openTime,
             closeTime: oh.closeTime,
+            slotDurationMinutes: oh.slotDurationMinutes ?? dto.slotDurationMinutes ?? 120,
             isClosed: oh.isClosed || false,
           })),
+          skipDuplicates: true,
+        });
+      } else {
+        // Default operating hours: 06:00 to 22:00, 2-hour slots for all 7 days (0..6)
+        const defaultHours = [];
+        for (let d = 0; d < 7; d++) {
+          defaultHours.push({
+            turfId: created.id,
+            dayOfWeek: d,
+            openTime: dto.openTime || '06:00',
+            closeTime: dto.closeTime || '22:00',
+            slotDurationMinutes: dto.slotDurationMinutes ?? 120,
+            isClosed: false,
+          });
+        }
+        await tx.operatingHour.createMany({
+          data: defaultHours,
           skipDuplicates: true,
         });
       }
@@ -920,6 +941,10 @@ export class TurfsService {
     if (dto.rules !== undefined) updateData.rules = dto.rules;
     if (dto.cancellationPolicy !== undefined)
       updateData.cancellationPolicy = dto.cancellationPolicy;
+    if (dto.openTime !== undefined) updateData.openTime = dto.openTime;
+    if (dto.closeTime !== undefined) updateData.closeTime = dto.closeTime;
+    if (dto.slotDurationMinutes !== undefined)
+      updateData.slotDurationMinutes = dto.slotDurationMinutes;
     if (dto.latitude !== undefined) {
       updateData.latitude = dto.latitude
         ? new Prisma.Decimal(dto.latitude)
@@ -991,6 +1016,7 @@ export class TurfsService {
               dayOfWeek: oh.dayOfWeek,
               openTime: oh.openTime,
               closeTime: oh.closeTime,
+              slotDurationMinutes: oh.slotDurationMinutes ?? dto.slotDurationMinutes ?? 120,
               isClosed: oh.isClosed || false,
             })),
           });

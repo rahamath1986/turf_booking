@@ -57,6 +57,17 @@ export class OperatingHourInputDto {
   @IsOptional()
   @IsBoolean()
   isClosed?: boolean = false;
+
+  @ApiPropertyOptional({
+    description: 'Slot duration in minutes (e.g. 120 for 2-hour slots)',
+    default: 120,
+    example: 120,
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(15)
+  @Max(720)
+  slotDurationMinutes?: number = 120;
 }
 
 export class PricingRuleInputDto {
@@ -144,6 +155,35 @@ export class PricingRuleInputDto {
 }
 
 export class SetAvailabilityDto {
+  @ApiPropertyOptional({
+    description: 'Turf-level default open time in HH:mm format',
+    example: '06:00',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/)
+  openTime?: string;
+
+  @ApiPropertyOptional({
+    description: 'Turf-level default close time in HH:mm format',
+    example: '22:00',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/)
+  closeTime?: string;
+
+  @ApiPropertyOptional({
+    description: 'Turf-level slot duration in minutes (e.g. 120 for 2-hour slots)',
+    example: 120,
+    default: 120,
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(15)
+  @Max(720)
+  slotDurationMinutes?: number;
+
   @ApiProperty({
     description:
       'Weekly operating hours for the turf (0 = Sun, 1 = Mon ... 6 = Sat)',

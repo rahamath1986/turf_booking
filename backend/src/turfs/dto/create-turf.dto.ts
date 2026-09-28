@@ -47,6 +47,17 @@ export class OperatingHourInputDto {
   @IsOptional()
   @IsBoolean()
   isClosed?: boolean;
+
+  @ApiPropertyOptional({
+    example: 120,
+    default: 120,
+    description: 'Slot duration in minutes (e.g. 120 for 2-hour slots)',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(15)
+  @Max(720)
+  slotDurationMinutes?: number = 120;
 }
 
 export class PricingRuleInputDto {
@@ -218,6 +229,41 @@ export class CreateTurfDto {
   @IsArray()
   @IsUUID('4', { each: true })
   facilityIds?: string[];
+
+  @ApiPropertyOptional({
+    example: '06:00',
+    default: '06:00',
+    description: 'Turf opening time in HH:mm format',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^([01]\d|2[0-3]):([0-5]\d)$/, {
+    message: 'openTime must be HH:MM format',
+  })
+  openTime?: string = '06:00';
+
+  @ApiPropertyOptional({
+    example: '22:00',
+    default: '22:00',
+    description: 'Turf closing time in HH:mm format',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^([01]\d|2[0-3]):([0-5]\d)$/, {
+    message: 'closeTime must be HH:MM format',
+  })
+  closeTime?: string = '22:00';
+
+  @ApiPropertyOptional({
+    example: 120,
+    default: 120,
+    description: 'Default slot duration in minutes (e.g. 120 for 2-hour slots)',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(15)
+  @Max(720)
+  slotDurationMinutes?: number = 120;
 
   @ApiPropertyOptional({ type: [OperatingHourInputDto] })
   @IsOptional()

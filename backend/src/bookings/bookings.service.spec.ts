@@ -64,6 +64,7 @@ describe('BookingsService', () => {
     slotHold: {
       findFirst: jest.fn(),
       findUnique: jest.fn(),
+      findMany: jest.fn().mockResolvedValue([]),
       create: jest.fn(),
       update: jest.fn(),
       updateMany: jest.fn(),
@@ -71,7 +72,7 @@ describe('BookingsService', () => {
     booking: {
       findFirst: jest.fn(),
       findUnique: jest.fn(),
-      findMany: jest.fn(),
+      findMany: jest.fn().mockResolvedValue([]),
       count: jest.fn(),
       create: jest.fn(),
       update: jest.fn(),
@@ -98,6 +99,8 @@ describe('BookingsService', () => {
 
   beforeEach(async () => {
     jest.clearAllMocks();
+    mockPrismaService.slotHold.findMany.mockResolvedValue([]);
+    mockPrismaService.booking.findMany.mockResolvedValue([]);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -137,11 +140,13 @@ describe('BookingsService', () => {
 
     it('should reject hold if slot is already held by another customer', async () => {
       mockPrismaService.turf.findFirst.mockResolvedValue(mockTurf);
-      mockPrismaService.slotHold.findFirst.mockResolvedValue({
-        ...mockHold,
-        userId: 'other-user',
-        expiresAt: new Date(Date.now() + 5 * 60 * 1000),
-      });
+      mockPrismaService.slotHold.findMany.mockResolvedValue([
+        {
+          ...mockHold,
+          userId: 'other-user',
+          expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+        },
+      ]);
 
       await expect(
         service.createHold('user-1', {
@@ -155,8 +160,8 @@ describe('BookingsService', () => {
 
     it('should reject hold if slot is already booked', async () => {
       mockPrismaService.turf.findFirst.mockResolvedValue(mockTurf);
-      mockPrismaService.slotHold.findFirst.mockResolvedValue(null);
-      mockPrismaService.booking.findFirst.mockResolvedValue(mockBooking);
+      mockPrismaService.slotHold.findMany.mockResolvedValue([]);
+      mockPrismaService.booking.findMany.mockResolvedValue([mockBooking]);
 
       await expect(
         service.createHold('user-1', {
@@ -213,7 +218,7 @@ describe('BookingsService', () => {
 
     it('should prevent double booking if slot already confirmed', async () => {
       mockPrismaService.slotHold.findUnique.mockResolvedValue(mockHold);
-      mockPrismaService.booking.findFirst.mockResolvedValue(mockBooking);
+      mockPrismaService.booking.findMany.mockResolvedValue([mockBooking]);
 
       await expect(
         service.createBooking('user-1', { holdId: 'hold-1' }),
@@ -230,6 +235,76 @@ describe('BookingsService', () => {
 
       expect(result).toEqual(mockBooking);
       expect(mockPrismaService.booking.create).not.toHaveBeenCalled();
+    });
+
+    it('should confirm direct multi-slot booking and store timeSlots array', async () => {
+      mockPrismaService.slotHold.findFirst.mockResolvedValue(null);
+      mockPrismaService.booking.findFirst.mockResolvedValue(null);
+      mockAvailabilityService.getAvailableSlots.mockResolvedValue({
+        slots: [
+          { startTime: '18:00', endTime: '19:00', price: 1000, isAvailable: true },
+          { startTime: '19:00', endTime: '20:00', price: 1200, isAvailable: true },
+        ],
+      });
+      mockPrismaService.booking.create.mockResolvedValue({
+        ...mockBooking,
+        startTime: '18:00',
+        endTime: '20:00',
+        durationMinutes: 120,
+        totalPrice: 2200,
+        timeSlots: [
+          { startTime: '18:00', endTime: '19:00', price: 1000, durationMinutes: 60 },
+          { startTime: '19:00', endTime: '20:00', price: 1200, durationMinutes: 60 },
+        ],
+      });
+
+      const result = await service.createBooking('user-1', {
+        turfId: 'turf-1',
+        bookingDate: '2026-09-28',
+        timeSlots: [
+          { startTime: '18:00', endTime: '19:00' },
+          { startTime: '19:00', endTime: '20:00' },
+        ],
+      });
+
+      expect(result.status).toBe(BookingStatus.CONFIRMED);
+      expect(mockPrismaService.booking.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            startTime: '18:00',
+            endTime: '20:00',
+            durationMinutes: 120,
+            timeSlots: expect.arrayContaining([
+              expect.objectContaining({ startTime: '18:00', endTime: '19:00', price: 1000 }),
+              expect.objectContaining({ startTime: '19:00', endTime: '20:00', price: 1200 }),
+            ]),
+          }),
+        }),
+      );
+    });
+
+    it('should calculate quote for multiple time slots', async () => {
+      mockPrismaService.turf.findFirst.mockResolvedValue(mockTurf);
+      mockAvailabilityService.getAvailableSlots.mockResolvedValue({
+        slots: [
+          { startTime: '18:00', endTime: '19:00', price: 1000, isAvailable: true },
+          { startTime: '19:00', endTime: '20:00', price: 1200, isAvailable: true },
+        ],
+      });
+
+      const quote = await service.calculateQuote('user-1', {
+        turfId: 'turf-1',
+        date: '2026-09-28',
+        timeSlots: [
+          { startTime: '18:00', endTime: '19:00' },
+          { startTime: '19:00', endTime: '20:00' },
+        ],
+      });
+
+      expect(quote.timeSlots).toHaveLength(2);
+      expect(quote.feeBreakdown.basePrice).toBe(2200);
+      expect(quote.startTime).toBe('18:00');
+      expect(quote.endTime).toBe('20:00');
     });
   });
 
@@ -301,10 +376,14 @@ describe('BookingsService', () => {
 
     it('should reject reschedule if target slot is already booked', async () => {
       mockPrismaService.booking.findUnique.mockResolvedValue(mockBooking);
-      mockPrismaService.slotHold.findFirst.mockResolvedValue(null);
-      mockPrismaService.booking.findFirst.mockResolvedValue({
-        id: 'conflicting-booking',
-      });
+      mockPrismaService.slotHold.findMany.mockResolvedValue([]);
+      mockPrismaService.booking.findMany.mockResolvedValue([
+        {
+          id: 'conflicting-booking',
+          startTime: '19:00',
+          endTime: '20:00',
+        },
+      ]);
 
       await expect(
         service.rescheduleBooking('user-1', ['CUSTOMER'], 'booking-1', {
@@ -313,6 +392,97 @@ describe('BookingsService', () => {
           newEndTime: '20:00',
         }),
       ).rejects.toThrow(ConflictException);
+    });
+  });
+
+  describe('Edit / Update Booking Operations', () => {
+    it('should update booking slots and schedule with advisory lock and history entry', async () => {
+      mockPrismaService.booking.findUnique.mockResolvedValue(mockBooking);
+      mockPrismaService.slotHold.findMany.mockResolvedValue([]);
+      mockPrismaService.booking.findMany.mockResolvedValue([]);
+      mockPrismaService.booking.update.mockResolvedValue({
+        ...mockBooking,
+        bookingDate: new Date('2026-10-01'),
+        startTime: '18:00',
+        endTime: '20:00',
+        durationMinutes: 120,
+        timeSlots: [
+          { startTime: '18:00', endTime: '20:00', price: 2000 },
+        ],
+      });
+
+      const updated = await service.updateBooking(
+        'user-1',
+        ['CUSTOMER'],
+        'booking-1',
+        {
+          bookingDate: '2026-10-01',
+          timeSlots: [
+            { startTime: '18:00', endTime: '20:00' },
+          ],
+          reason: 'Moved to 2-hour evening slot',
+        },
+      );
+
+      expect(updated.startTime).toBe('18:00');
+      expect(updated.endTime).toBe('20:00');
+      expect(mockPrismaService.booking.update).toHaveBeenCalled();
+      expect(mockPrismaService.bookingStatusHistory.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            bookingId: 'booking-1',
+            reason: 'Moved to 2-hour evening slot',
+          }),
+        }),
+      );
+    });
+
+    it('should reject update if new slot conflicts with another booking on the turf', async () => {
+      mockPrismaService.booking.findUnique.mockResolvedValue(mockBooking);
+      mockPrismaService.slotHold.findMany.mockResolvedValue([]);
+      mockPrismaService.booking.findMany.mockResolvedValue([
+        {
+          id: 'conflicting-id',
+          turfId: 'turf-1',
+          bookingDate: new Date('2026-10-01'),
+          startTime: '18:00',
+          endTime: '20:00',
+        },
+      ]);
+
+      await expect(
+        service.updateBooking('user-1', ['CUSTOMER'], 'booking-1', {
+          bookingDate: '2026-10-01',
+          startTime: '18:00',
+          endTime: '20:00',
+        }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('should allow updating non-schedule fields such as sportId', async () => {
+      mockPrismaService.booking.findUnique.mockResolvedValue(mockBooking);
+      mockPrismaService.booking.update.mockResolvedValue({
+        ...mockBooking,
+        sportId: 'sport-new',
+      });
+
+      const result = await service.updateBooking(
+        'user-1',
+        ['CUSTOMER'],
+        'booking-1',
+        {
+          sportId: 'sport-new',
+          reason: 'Changed sport to Badminton',
+        },
+      );
+
+      expect(mockPrismaService.booking.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            sport: { connect: { id: 'sport-new' } },
+          }),
+        }),
+      );
     });
   });
 });

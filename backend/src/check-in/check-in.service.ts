@@ -218,6 +218,7 @@ export class CheckInService {
         checkedInAt: booking.checkedInAt,
         isCheckedOut: Boolean(booking.checkedOutAt),
         checkedOutAt: booking.checkedOutAt,
+        timeSlots: (booking as any).timeSlots || null,
       },
     };
   }
@@ -361,6 +362,7 @@ export class CheckInService {
         durationMinutes: booking.durationMinutes,
         status: booking.status,
         totalPrice: Number(booking.totalPrice),
+        timeSlots: (booking as any).timeSlots || null,
       },
       customer: {
         id: booking.user.id,

@@ -4,6 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { BookingStatus, HoldStatus } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service';
 import { Role } from '../common/enums/role.enum';
 import { AvailabilityQueryDto } from './dto/availability-query.dto';
@@ -15,9 +16,11 @@ export interface CalculatedSlot {
   slotId: string;
   startTime: string;
   endTime: string;
+  durationMinutes?: number;
   date: string;
   isAvailable: boolean;
-  status: 'AVAILABLE' | 'BLOCKED';
+  status: 'AVAILABLE' | 'BLOCKED' | 'BOOKED' | 'HELD';
+  isBooked: boolean;
   price: number;
   pricingType: string;
   ruleName: string;
@@ -163,6 +166,8 @@ export class AvailabilityService {
       let totalSlots = 0;
       let openTime: string | null = null;
       let closeTime: string | null = null;
+      const defaultDuration = (turf as any).slotDurationMinutes || 120;
+      const slotDuration = oh?.slotDurationMinutes || defaultDuration;
 
       if (!isClosed && oh) {
         openTime = oh.openTime;
@@ -172,18 +177,51 @@ export class AvailabilityService {
           oh.closeTime === '00:00' || oh.closeTime === '24:00'
             ? 24 * 60
             : this.timeToMinutes(oh.closeTime);
-        totalSlots = Math.max(0, Math.floor((closeMin - openMin) / 60));
+        totalSlots = Math.max(0, Math.floor((closeMin - openMin) / slotDuration));
       }
 
-      // Query blocked slots for this date
-      const blockedRecords = await this.prisma.blockedSlot.findMany({
-        where: {
-          turfId,
-          blockDate: new Date(dateStr),
-        },
-      });
+      // Query blocked slots, active bookings, and active holds for this date
+      const [blockedRecords, activeBookings, activeHolds] = await Promise.all([
+        this.prisma.blockedSlot.findMany({
+          where: {
+            turfId,
+            blockDate: new Date(dateStr),
+          },
+        }),
+        this.prisma.booking.findMany({
+          where: {
+            turfId,
+            bookingDate: new Date(dateStr),
+            status: {
+              in: [
+                BookingStatus.CONFIRMED,
+                BookingStatus.PENDING,
+                BookingStatus.PAYMENT_PENDING,
+              ],
+            },
+          },
+          select: {
+            startTime: true,
+            endTime: true,
+            timeSlots: true,
+          },
+        }),
+        this.prisma.slotHold.findMany({
+          where: {
+            turfId,
+            holdDate: new Date(dateStr),
+            status: HoldStatus.ACTIVE,
+            expiresAt: { gt: new Date() },
+          },
+          select: {
+            startTime: true,
+            endTime: true,
+            timeSlots: true,
+          },
+        }),
+      ]);
 
-      // Count blocked hour units
+      // Count blocked/occupied slot units
       let blockedSlotsCount = 0;
       if (!isClosed && oh) {
         const openMin = this.timeToMinutes(oh.openTime);
@@ -192,13 +230,37 @@ export class AvailabilityService {
             ? 24 * 60
             : this.timeToMinutes(oh.closeTime);
 
-        for (let m = openMin; m < closeMin; m += 60) {
+        for (let m = openMin; m + slotDuration <= closeMin; m += slotDuration) {
           const sStart = this.minutesToTime(m);
-          const sEnd = this.minutesToTime(m + 60);
+          const sEnd = this.minutesToTime(m + slotDuration);
+
           const isBlocked = blockedRecords.some((b) =>
             this.isOverlapping(sStart, sEnd, b.startTime, b.endTime),
           );
-          if (isBlocked) blockedSlotsCount++;
+
+          const isBooked = activeBookings.some((b) => {
+            if (Array.isArray(b.timeSlots) && b.timeSlots.length > 0) {
+              return (b.timeSlots as any[]).some(
+                (ts) =>
+                  ts.startTime === sStart ||
+                  this.isOverlapping(sStart, sEnd, ts.startTime, ts.endTime),
+              );
+            }
+            return this.isOverlapping(sStart, sEnd, b.startTime, b.endTime);
+          });
+
+          const isHeld = activeHolds.some((h) => {
+            if (Array.isArray(h.timeSlots) && h.timeSlots.length > 0) {
+              return (h.timeSlots as any[]).some(
+                (ts) =>
+                  ts.startTime === sStart ||
+                  this.isOverlapping(sStart, sEnd, ts.startTime, ts.endTime),
+              );
+            }
+            return this.isOverlapping(sStart, sEnd, h.startTime, h.endTime);
+          });
+
+          if (isBlocked || isBooked || isHeld) blockedSlotsCount++;
         }
       }
 
@@ -211,6 +273,7 @@ export class AvailabilityService {
         isClosed,
         openTime,
         closeTime,
+        slotDurationMinutes: slotDuration,
         totalSlots,
         blockedSlotsCount,
         availableSlotsCount,
@@ -251,7 +314,23 @@ export class AvailabilityService {
     const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
     const isWeekday = dayOfWeek >= 1 && dayOfWeek <= 5;
 
-    const oh = turf.operatingHours.find((h) => h.dayOfWeek === dayOfWeek);
+    let oh = turf.operatingHours.find((h) => h.dayOfWeek === dayOfWeek);
+    if (!oh && turf.operatingHours.length === 0) {
+      oh = {
+        id: `virtual-oh-${dayOfWeek}`,
+        turfId: turf.id,
+        dayOfWeek,
+        openTime: (turf as any).openTime || '06:00',
+        closeTime: (turf as any).closeTime || '22:00',
+        slotDurationMinutes: (turf as any).slotDurationMinutes || 120,
+        isClosed: false,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+    }
+
+    const defaultDuration = (turf as any).slotDurationMinutes || 120;
+    const slotDuration = oh?.slotDurationMinutes || defaultDuration;
 
     if (!oh || oh.isClosed) {
       return {
@@ -261,6 +340,9 @@ export class AvailabilityService {
         dayOfWeek,
         dayName,
         isClosed: true,
+        openTime: oh ? oh.openTime : ((turf as any).openTime || '06:00'),
+        closeTime: oh ? oh.closeTime : ((turf as any).closeTime || '22:00'),
+        slotDurationMinutes: slotDuration,
         closureReason: 'Venue is closed on this day',
         totalSlots: 0,
         availableCount: 0,
@@ -269,13 +351,46 @@ export class AvailabilityService {
       };
     }
 
-    // Fetch blocked slots for this specific date
-    const blockedSlots = await this.prisma.blockedSlot.findMany({
-      where: {
-        turfId,
-        blockDate: new Date(targetDateStr),
-      },
-    });
+    // Fetch blocked slots, active bookings, and active holds for this specific date
+    const [blockedSlots, activeBookings, activeHolds] = await Promise.all([
+      this.prisma.blockedSlot.findMany({
+        where: {
+          turfId,
+          blockDate: new Date(targetDateStr),
+        },
+      }),
+      this.prisma.booking.findMany({
+        where: {
+          turfId,
+          bookingDate: new Date(targetDateStr),
+          status: {
+            in: [
+              BookingStatus.CONFIRMED,
+              BookingStatus.PENDING,
+              BookingStatus.PAYMENT_PENDING,
+            ],
+          },
+        },
+        select: {
+          startTime: true,
+          endTime: true,
+          timeSlots: true,
+        },
+      }),
+      this.prisma.slotHold.findMany({
+        where: {
+          turfId,
+          holdDate: new Date(targetDateStr),
+          status: HoldStatus.ACTIVE,
+          expiresAt: { gt: new Date() },
+        },
+        select: {
+          startTime: true,
+          endTime: true,
+          timeSlots: true,
+        },
+      }),
+    ]);
 
     const openMin = this.timeToMinutes(oh.openTime);
     let closeMin = this.timeToMinutes(oh.closeTime);
@@ -297,16 +412,45 @@ export class AvailabilityService {
       return true;
     });
 
-    for (let m = openMin; m < closeMin; m += 60) {
+    for (let m = openMin; m + slotDuration <= closeMin; m += slotDuration) {
       const slotStart = this.minutesToTime(m);
-      const slotEnd = this.minutesToTime(m + 60);
+      const slotEnd = this.minutesToTime(m + slotDuration);
 
-      // Check if blocked
+      // Check if blocked by venue maintenance
       const blockingRecord = blockedSlots.find((b) =>
         this.isOverlapping(slotStart, slotEnd, b.startTime, b.endTime),
       );
 
-      const isBlocked = !!blockingRecord;
+      // Check if already booked
+      const isBooked = activeBookings.some((b) => {
+        if (Array.isArray(b.timeSlots) && b.timeSlots.length > 0) {
+          return (b.timeSlots as any[]).some(
+            (ts) =>
+              this.isOverlapping(slotStart, slotEnd, ts.startTime, ts.endTime),
+          );
+        }
+        return this.isOverlapping(slotStart, slotEnd, b.startTime, b.endTime);
+      });
+
+      // Check if currently held
+      const isHeld = activeHolds.some((h) => {
+        if (Array.isArray(h.timeSlots) && h.timeSlots.length > 0) {
+          return (h.timeSlots as any[]).some(
+            (ts) =>
+              this.isOverlapping(slotStart, slotEnd, ts.startTime, ts.endTime),
+          );
+        }
+        return this.isOverlapping(slotStart, slotEnd, h.startTime, h.endTime);
+      });
+
+      const isUnavailable = !!blockingRecord || isBooked || isHeld;
+      const blockReason = blockingRecord
+        ? blockingRecord.reason || 'Blocked by Venue'
+        : isBooked
+          ? 'Booked'
+          : isHeld
+            ? 'Temporarily Held'
+            : null;
 
       // Evaluate dynamic pricing hierarchy:
       // Priority 1: SPECIAL (matches specific date)
@@ -389,7 +533,8 @@ export class AvailabilityService {
         );
       }
 
-      const slotPrice = matchedRule ? Number(matchedRule.hourlyPrice) : 1000;
+      const hourlyRate = matchedRule ? Number(matchedRule.hourlyPrice) : 1000;
+      const slotPrice = Math.round((hourlyRate * slotDuration) / 60);
 
       const pricingType = matchedRule
         ? matchedRule.dayType
@@ -400,17 +545,27 @@ export class AvailabilityService {
         ? matchedRule.ruleName
         : 'Standard Base Rate';
 
+      const slotStatus: 'AVAILABLE' | 'BLOCKED' | 'BOOKED' | 'HELD' = isBooked
+        ? 'BOOKED'
+        : isHeld
+          ? 'HELD'
+          : blockingRecord
+            ? 'BLOCKED'
+            : 'AVAILABLE';
+
       slots.push({
         slotId: `${targetDateStr}_${slotStart.replace(':', '')}_${slotEnd.replace(':', '')}`,
         startTime: slotStart,
         endTime: slotEnd,
+        durationMinutes: slotDuration,
         date: targetDateStr,
-        isAvailable: !isBlocked,
-        status: isBlocked ? 'BLOCKED' : 'AVAILABLE',
+        isAvailable: !isUnavailable,
+        status: slotStatus,
+        isBooked: isBooked || isHeld,
         price: slotPrice,
         pricingType,
         ruleName,
-        blockReason: blockingRecord ? blockingRecord.reason || 'Blocked' : null,
+        blockReason,
         blockedSlotId: blockingRecord ? blockingRecord.id : null,
       });
     }
@@ -425,6 +580,9 @@ export class AvailabilityService {
       dayOfWeek,
       dayName,
       isClosed: false,
+      openTime: oh.openTime,
+      closeTime: oh.closeTime,
+      slotDurationMinutes: slotDuration,
       totalSlots: slots.length,
       availableCount,
       blockedCount,
@@ -513,7 +671,16 @@ export class AvailabilityService {
   ) {
     await this.assertTurfOwnership(turfId, userId, userRoles);
 
-    const [operatingHours, blockedSlots, pricingRules] = await Promise.all([
+    const [turf, operatingHours, blockedSlots, pricingRules] = await Promise.all([
+      this.prisma.turf.findUnique({
+        where: { id: turfId },
+        select: {
+          id: true,
+          openTime: true,
+          closeTime: true,
+          slotDurationMinutes: true,
+        },
+      }),
       this.prisma.operatingHour.findMany({
         where: { turfId },
         orderBy: { dayOfWeek: 'asc' },
@@ -533,12 +700,16 @@ export class AvailabilityService {
 
     return {
       turfId,
+      openTime: turf?.openTime || '06:00',
+      closeTime: turf?.closeTime || '22:00',
+      slotDurationMinutes: turf?.slotDurationMinutes || 120,
       operatingHours: operatingHours.map((oh) => ({
         id: oh.id,
         dayOfWeek: oh.dayOfWeek,
         dayName: this.getDayName(oh.dayOfWeek),
         openTime: oh.openTime,
         closeTime: oh.closeTime,
+        slotDurationMinutes: oh.slotDurationMinutes || turf?.slotDurationMinutes || 120,
         isClosed: oh.isClosed,
       })),
       upcomingBlockedSlots: blockedSlots.map((b) => ({
@@ -577,6 +748,18 @@ export class AvailabilityService {
     await this.assertTurfOwnership(turfId, userId, userRoles);
 
     return this.prisma.$transaction(async (tx) => {
+      // Update turf-level default timing and slot duration if provided
+      if (dto.openTime || dto.closeTime || dto.slotDurationMinutes) {
+        const turfUpdate: any = {};
+        if (dto.openTime) turfUpdate.openTime = dto.openTime;
+        if (dto.closeTime) turfUpdate.closeTime = dto.closeTime;
+        if (dto.slotDurationMinutes) turfUpdate.slotDurationMinutes = dto.slotDurationMinutes;
+        await tx.turf.update({
+          where: { id: turfId },
+          data: turfUpdate,
+        });
+      }
+
       // Upsert operating hours for each specified day of week
       for (const item of dto.operatingHours) {
         await tx.operatingHour.upsert({
@@ -589,6 +772,7 @@ export class AvailabilityService {
           update: {
             openTime: item.openTime,
             closeTime: item.closeTime,
+            slotDurationMinutes: item.slotDurationMinutes ?? dto.slotDurationMinutes ?? 120,
             isClosed: item.isClosed ?? false,
           },
           create: {
@@ -596,6 +780,7 @@ export class AvailabilityService {
             dayOfWeek: item.dayOfWeek,
             openTime: item.openTime,
             closeTime: item.closeTime,
+            slotDurationMinutes: item.slotDurationMinutes ?? dto.slotDurationMinutes ?? 120,
             isClosed: item.isClosed ?? false,
           },
         });

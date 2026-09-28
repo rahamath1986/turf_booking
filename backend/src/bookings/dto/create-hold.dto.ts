@@ -1,12 +1,16 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 import {
+  IsArray,
   IsDateString,
   IsNotEmpty,
   IsOptional,
   IsString,
   IsUUID,
   Matches,
+  ValidateNested,
 } from 'class-validator';
+import { BookingTimeSlotDto } from './booking-time-slot.dto';
 
 export class CreateHoldDto {
   @ApiProperty({
@@ -25,25 +29,41 @@ export class CreateHoldDto {
   @IsDateString()
   holdDate: string;
 
-  @ApiProperty({
-    description: 'Slot start time in HH:mm 24-hr format',
+  @ApiPropertyOptional({
+    description: 'Slot start time in HH:mm 24-hr format (optional if timeSlots provided)',
     example: '18:00',
   })
+  @IsOptional()
   @IsString()
   @Matches(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/, {
     message: 'startTime must be in HH:mm format',
   })
-  startTime: string;
+  startTime?: string;
 
-  @ApiProperty({
-    description: 'Slot end time in HH:mm 24-hr format',
+  @ApiPropertyOptional({
+    description: 'Slot end time in HH:mm 24-hr format (optional if timeSlots provided)',
     example: '19:00',
   })
+  @IsOptional()
   @IsString()
   @Matches(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/, {
     message: 'endTime must be in HH:mm format',
   })
-  endTime: string;
+  endTime?: string;
+
+  @ApiPropertyOptional({
+    description: 'Array of time slots for multi-slot hold',
+    type: [BookingTimeSlotDto],
+    example: [
+      { startTime: '18:00', endTime: '19:00', price: 1000 },
+      { startTime: '19:00', endTime: '20:00', price: 1000 },
+    ],
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => BookingTimeSlotDto)
+  timeSlots?: BookingTimeSlotDto[];
 
   @ApiPropertyOptional({
     description: 'Optional sport ID for sport-specific court reservation',
