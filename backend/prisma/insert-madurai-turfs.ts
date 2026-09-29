@@ -48,6 +48,10 @@ const MADURAI_AREAS = [
   { name: 'Paravai', slug: 'paravai', postalCode: '625402', latitude: 9.9620, longitude: 78.0754 },
   { name: 'K.K. Nagar', slug: 'kk-nagar', postalCode: '625020', latitude: 9.9298, longitude: 78.1512 },
   { name: 'Anna Nagar', slug: 'anna-nagar', postalCode: '625020', latitude: 9.9192, longitude: 78.1524 },
+  { name: 'Andalpuram', slug: 'andalpuram', postalCode: '625003', latitude: 9.9075, longitude: 78.1054 },
+  { name: 'Karuppayurani', slug: 'karuppayurani', postalCode: '625020', latitude: 9.9312, longitude: 78.1874 },
+  { name: 'Goripalayam', slug: 'goripalayam', postalCode: '625002', latitude: 9.9324, longitude: 78.1328 },
+  { name: 'Tallakulam', slug: 'tallakulam', postalCode: '625002', latitude: 9.9348, longitude: 78.1385 },
 ];
 
 const img = (id: string) => `https://images.unsplash.com/${id}?auto=format&fit=crop&w=1200&q=80`;
@@ -556,6 +560,204 @@ const MADURAI_TURFS: MaduraiTurfDefinition[] = [
     totalReviews: 60,
     isFeatured: false,
     rules: '1. Non-cleat footwear or turf boots required. 2. Follow ground coordinator instructions.',
+  // --- REAL MADURAI BADMINTON VENUES ---
+  {
+    name: 'Pro Arena Indoor Badminton Court',
+    slug: 'pro-arena-indoor-badminton-court-andalpuram',
+    areaSlug: 'andalpuram',
+    addressLine: 'Opposite Vasantha Nagar, TPK Main Road, Andalpuram, Madurai, Tamil Nadu',
+    postalCode: '625003',
+    latitude: 9.9075,
+    longitude: 78.1054,
+    contactPhone: '+919842123450',
+    contactEmail: 'proarena.badminton@gmail.com',
+    description: 'Premier indoor badminton court in Andalpuram equipped with 4 BWF-grade wooden synthetic courts, glare-free LED arena lighting, changing rooms, and racquet stringing facilities.',
+    coverImageUrl: img('photo-1624880357913-a8539238245b'),
+    galleryImages: [
+      { url: img('photo-1613918108466-292b78a8ef95'), caption: 'BWF synthetic tournament court' },
+      { url: img('photo-1521537634581-0dced2fee2ef'), caption: 'High-clearance ceiling and arena lighting' },
+      { url: img('photo-1574629810360-7efbbe195018'), caption: 'Warmup area and practice enclosure' },
+      { url: img('photo-1540747913346-19e32dc3e97e'), caption: 'Evening coaching session view' },
+    ],
+    sports: ['badminton'],
+    facilities: ['floodlights', 'changing-rooms', 'drinking-water', 'parking-space', 'equipment-rental'],
+    hourlyPriceRegular: 450.0,
+    hourlyPriceNight: 600.0,
+    hourlyPriceWeekend: 650.0,
+    ratingAverage: 4.88,
+    totalReviews: 79,
+    isFeatured: true,
+    rules: '1. Non-marking gum sole shoes mandatory on badminton courts. 2. Arrive 10 minutes prior to booking slot. 3. Food and sugary drinks not allowed inside court arena.',
+  },
+  {
+    name: 'KMP Badminton Academy',
+    slug: 'kmp-badminton-academy-karuppayurani',
+    areaSlug: 'karuppayurani',
+    addressLine: 'Sivagangai Main Road, Near Ring Road Junction, Karuppayurani, Madurai, Tamil Nadu',
+    postalCode: '625020',
+    latitude: 9.9312,
+    longitude: 78.1874,
+    contactPhone: '+919443187654',
+    contactEmail: 'kmpbadminton.mdu@gmail.com',
+    description: 'Renowned badminton academy in eastern Madurai. Features 6 international-standard shock-absorbing wooden courts with anti-skid mats, professional coaches, and spacious visitor gallery.',
+    coverImageUrl: img('photo-1613918108466-292b78a8ef95'),
+    galleryImages: [
+      { url: img('photo-1624880357913-a8539238245b'), caption: 'Tournament court lines overview' },
+      { url: img('photo-1521537634581-0dced2fee2ef'), caption: 'Anti-glare floodlights and high roof' },
+      { url: img('photo-1574629810360-7efbbe195018'), caption: 'Player lounge and equipment desk' },
+      { url: img('photo-1522778119026-d647f0596c20'), caption: 'Spectator gallery' },
+    ],
+    sports: ['badminton'],
+    facilities: ['floodlights', 'changing-rooms', 'drinking-water', 'parking-space', 'first-aid', 'spectator-seating'],
+    hourlyPriceRegular: 400.0,
+    hourlyPriceNight: 500.0,
+    hourlyPriceWeekend: 550.0,
+    ratingAverage: 4.82,
+    totalReviews: 68,
+    isFeatured: true,
+    rules: '1. Gum sole shoes only. 2. Maximum 6 players permitted per court reservation. 3. Respect court timings.',
+  },
+  {
+    name: '3 Racquet Badminton Arena',
+    slug: '3-racquet-badminton-arena-ponmeni',
+    areaSlug: 'ponmeni',
+    addressLine: 'Nehru Nagar, Bye Pass Road, Ponmeni, Madurai, Tamil Nadu',
+    postalCode: '625016',
+    latitude: 9.9172,
+    longitude: 78.0945,
+    contactPhone: '+919944556677',
+    contactEmail: '3racquet.madurai@gmail.com',
+    description: 'Madurai Bye Pass Road’s leading multi-court indoor badminton facility with premium Yonex mats, cross-ventilation, hot showers, and racquet rental shop.',
+    coverImageUrl: img('photo-1521537634581-0dced2fee2ef'),
+    galleryImages: [
+      { url: img('photo-1624880357913-a8539238245b'), caption: 'Championship court surface' },
+      { url: img('photo-1613918108466-292b78a8ef95'), caption: 'Practice court and net' },
+      { url: img('photo-1540747913346-19e32dc3e97e'), caption: 'Night lights view' },
+      { url: img('photo-1574629810360-7efbbe195018'), caption: 'Enclosed indoor court complex' },
+    ],
+    sports: ['badminton'],
+    facilities: ['floodlights', 'changing-rooms', 'drinking-water', 'parking-space', 'equipment-rental', 'cafeteria'],
+    hourlyPriceRegular: 450.0,
+    hourlyPriceNight: 600.0,
+    hourlyPriceWeekend: 650.0,
+    ratingAverage: 4.79,
+    totalReviews: 55,
+    isFeatured: false,
+    rules: '1. Clean non-marking shoes required. 2. Please maintain court discipline.',
+  },
+  {
+    name: 'Somu Badminton Academy',
+    slug: 'somu-badminton-academy-gomathipuram',
+    areaSlug: 'gomathipuram',
+    addressLine: '4th Cross Street, Melur Road, Gomathipuram, Madurai, Tamil Nadu',
+    postalCode: '625020',
+    latitude: 9.9228,
+    longitude: 78.1648,
+    contactPhone: '+919791012345',
+    contactEmail: 'somubadminton@gmail.com',
+    description: 'Modern indoor badminton club in Gomathipuram offering high-density rubber cushioned flooring, customized lighting to eliminate blind spots, and coaching programs for all age groups.',
+    coverImageUrl: img('photo-1624880357913-a8539238245b'),
+    galleryImages: [
+      { url: img('photo-1613918108466-292b78a8ef95'), caption: 'Interior court perspective' },
+      { url: img('photo-1521537634581-0dced2fee2ef'), caption: 'Side view of match nets' },
+      { url: img('photo-1574629810360-7efbbe195018'), caption: 'Locker and dressing rooms' },
+      { url: img('photo-1540747913346-19e32dc3e97e'), caption: 'Floodlights in action' },
+    ],
+    sports: ['badminton'],
+    facilities: ['floodlights', 'changing-rooms', 'drinking-water', 'parking-space'],
+    hourlyPriceRegular: 400.0,
+    hourlyPriceNight: 500.0,
+    hourlyPriceWeekend: 550.0,
+    ratingAverage: 4.76,
+    totalReviews: 44,
+    isFeatured: false,
+    rules: '1. Strictly gum sole shoes. 2. Outside shoes to be left at the entrance shoe rack.',
+  },
+
+  // --- REAL MADURAI TENNIS VENUES ---
+  {
+    name: 'Royal Aces Tennis Academy',
+    slug: 'royal-aces-tennis-academy-goripalayam',
+    areaSlug: 'goripalayam',
+    addressLine: 'American College Tennis Grounds, Alwarpuram, Goripalayam, Madurai, Tamil Nadu',
+    postalCode: '625002',
+    latitude: 9.9324,
+    longitude: 78.1328,
+    contactPhone: '+919842199887',
+    contactEmail: 'royalaces.tennis@gmail.com',
+    description: 'Madurai’s premier tennis academy situated on historic American College grounds. Features clay and hard tennis courts, AITA-certified training staff, night floodlights, and player club amenities.',
+    coverImageUrl: img('photo-1595435934249-5df7ed86e1c0'),
+    galleryImages: [
+      { url: img('photo-1554068865-24cecd4e34b8'), caption: 'Championship clay tennis court' },
+      { url: img('photo-1577223625816-7546f13df25d'), caption: 'Baseline view and net' },
+      { url: img('photo-1587280501635-68a0e82cd5ff'), caption: 'Hard court surface' },
+      { url: img('photo-1533107862482-0e6974b06ec4'), caption: 'Floodlights over evening game' },
+    ],
+    sports: ['tennis'],
+    facilities: ['floodlights', 'changing-rooms', 'drinking-water', 'parking-space', 'spectator-seating', 'equipment-rental'],
+    hourlyPriceRegular: 700.0,
+    hourlyPriceNight: 900.0,
+    hourlyPriceWeekend: 1000.0,
+    ratingAverage: 4.90,
+    totalReviews: 72,
+    isFeatured: true,
+    rules: '1. Standard tennis shoes with flat tread required. 2. Tennis attire mandatory. 3. Please clear court on scheduled time.',
+  },
+  {
+    name: 'Sangam Tennis Academy',
+    slug: 'sangam-tennis-academy-kk-nagar',
+    areaSlug: 'kk-nagar',
+    addressLine: 'Near Surveyor Colony, Kodikulam, K.K. Nagar, Madurai, Tamil Nadu',
+    postalCode: '625007',
+    latitude: 9.9410,
+    longitude: 78.1620,
+    contactPhone: '+919443322110',
+    contactEmail: 'sangamtennis.mdu@gmail.com',
+    description: 'Top-tier tennis facility near K.K. Nagar with well-maintained synthetic clay tennis courts, automated ball throwing machines, high-lux illumination, and open social play slots.',
+    coverImageUrl: img('photo-1554068865-24cecd4e34b8'),
+    galleryImages: [
+      { url: img('photo-1595435934249-5df7ed86e1c0'), caption: 'Regulation size clay court' },
+      { url: img('photo-1577223625816-7546f13df25d'), caption: 'Practice baseline' },
+      { url: img('photo-1587280501635-68a0e82cd5ff'), caption: 'Side court benches' },
+      { url: img('photo-1533107862482-0e6974b06ec4'), caption: 'Night lights view' },
+    ],
+    sports: ['tennis'],
+    facilities: ['floodlights', 'changing-rooms', 'drinking-water', 'parking-space', 'spectator-seating'],
+    hourlyPriceRegular: 650.0,
+    hourlyPriceNight: 850.0,
+    hourlyPriceWeekend: 950.0,
+    ratingAverage: 4.81,
+    totalReviews: 58,
+    isFeatured: true,
+    rules: '1. Proper tennis footwear mandatory. 2. Non-marking shoes for synthetic courts.',
+  },
+  {
+    name: 'The Madurai Union Club Tennis Courts',
+    slug: 'the-madurai-union-club-tennis-tallakulam',
+    areaSlug: 'tallakulam',
+    addressLine: 'Tamukkam Park Road, Opposite Rajaji Park, Tallakulam, Madurai, Tamil Nadu',
+    postalCode: '625020',
+    latitude: 9.9348,
+    longitude: 78.1385,
+    contactPhone: '+914522530120',
+    contactEmail: 'unionclub.tennis@gmail.com',
+    description: 'Heritage sports club offering prime tennis facilities in the heart of Tallakulam. Surrounded by lush greenery with club refreshments, locker rooms, and floodlit clay courts.',
+    coverImageUrl: img('photo-1587280501635-68a0e82cd5ff'),
+    galleryImages: [
+      { url: img('photo-1595435934249-5df7ed86e1c0'), caption: 'Classic red clay court' },
+      { url: img('photo-1554068865-24cecd4e34b8'), caption: 'Tournament court view' },
+      { url: img('photo-1577223625816-7546f13df25d'), caption: 'Player seating pavilion' },
+      { url: img('photo-1533107862482-0e6974b06ec4'), caption: 'Floodlit match action' },
+    ],
+    sports: ['tennis'],
+    facilities: ['floodlights', 'changing-rooms', 'drinking-water', 'parking-space', 'cafeteria'],
+    hourlyPriceRegular: 600.0,
+    hourlyPriceNight: 800.0,
+    hourlyPriceWeekend: 900.0,
+    ratingAverage: 4.85,
+    totalReviews: 61,
+    isFeatured: false,
+    rules: '1. Proper tennis dress code and shoes. 2. Advance booking required for non-members.',
   },
 ];
 
@@ -627,11 +829,50 @@ async function main() {
     areasMap[a.slug] = area;
   }
 
-  // 5. Sports Map
-  const allSports = await prisma.sport.findMany({ where: { isActive: true } });
+  // 5. Sports Map (guarantee Football, Cricket, Badminton, Tennis exist)
+  const sportsDefinitions = [
+    {
+      name: 'Football',
+      slug: 'football',
+      description: 'Association football (5v5, 7v7, 11v11) on artificial grass or turf',
+      iconUrl: 'https://cdn.turfbooking.com/sports/football.svg',
+      minPlayers: 10,
+      maxPlayers: 22,
+    },
+    {
+      name: 'Cricket',
+      slug: 'cricket',
+      description: 'Box cricket and pitch cricket with nets and bowling machines',
+      iconUrl: 'https://cdn.turfbooking.com/sports/cricket.svg',
+      minPlayers: 8,
+      maxPlayers: 16,
+    },
+    {
+      name: 'Badminton',
+      slug: 'badminton',
+      description: 'Indoor wooden and synthetic BWF-standard badminton courts',
+      iconUrl: 'https://cdn.turfbooking.com/sports/badminton.svg',
+      minPlayers: 2,
+      maxPlayers: 4,
+    },
+    {
+      name: 'Tennis',
+      slug: 'tennis',
+      description: 'Hard court, synthetic, and red clay tennis courts',
+      iconUrl: 'https://cdn.turfbooking.com/sports/tennis.svg',
+      minPlayers: 2,
+      maxPlayers: 4,
+    },
+  ];
+
   const sportsMap: Record<string, any> = {};
-  for (const s of allSports) {
-    sportsMap[s.slug] = s;
+  for (const s of sportsDefinitions) {
+    const sport = await prisma.sport.upsert({
+      where: { slug: s.slug },
+      update: { name: s.name, description: s.description, isActive: true },
+      create: { ...s, isActive: true },
+    });
+    sportsMap[s.slug] = sport;
   }
 
   // 6. Facilities Map
@@ -651,7 +892,7 @@ async function main() {
   }
   const turfOwner = ownerUser.turfOwner;
 
-  // 8. Update Turfs and full image sets
+  // 8. Update Turfs and full image sets, sports, facilities, hours, and pricing
   let updatedCount = 0;
   for (const turfDef of MADURAI_TURFS) {
     const area = areasMap[turfDef.areaSlug];
@@ -728,8 +969,91 @@ async function main() {
       });
     }
 
+    // Link sports to Turf
+    await prisma.turfSport.deleteMany({ where: { turfId: turf.id } });
+    for (const sportSlug of turfDef.sports) {
+      const sport = sportsMap[sportSlug];
+      if (sport) {
+        await prisma.turfSport.create({
+          data: {
+            turfId: turf.id,
+            sportId: sport.id,
+            isActive: true,
+          },
+        });
+      }
+    }
+
+    // Link facilities
+    await prisma.turfFacility.deleteMany({ where: { turfId: turf.id } });
+    for (const facSlug of turfDef.facilities) {
+      const fac = facilitiesMap[facSlug];
+      if (fac) {
+        await prisma.turfFacility.create({
+          data: {
+            turfId: turf.id,
+            facilityId: fac.id,
+            isActive: true,
+          },
+        });
+      }
+    }
+
+    // Operating hours (06:00 to 23:00)
+    await prisma.operatingHour.deleteMany({ where: { turfId: turf.id } });
+    await prisma.operatingHour.createMany({
+      data: [0, 1, 2, 3, 4, 5, 6].map((day) => ({
+        turfId: turf.id,
+        dayOfWeek: day,
+        openTime: '06:00',
+        closeTime: '23:00',
+        isClosed: false,
+      })),
+    });
+
+    // Pricing rules
+    await prisma.pricingRule.deleteMany({ where: { turfId: turf.id } });
+    const primarySportSlug = turfDef.sports[0];
+    const primarySport = sportsMap[primarySportSlug];
+    if (primarySport) {
+      await prisma.pricingRule.createMany({
+        data: [
+          {
+            turfId: turf.id,
+            sportId: primarySport.id,
+            ruleName: 'Regular Rate',
+            dayType: 'WEEKDAY',
+            startTime: '06:00',
+            endTime: '17:00',
+            hourlyPrice: turfDef.hourlyPriceRegular,
+            isActive: true,
+          },
+          {
+            turfId: turf.id,
+            sportId: primarySport.id,
+            ruleName: 'Night Prime',
+            dayType: 'WEEKDAY',
+            startTime: '17:00',
+            endTime: '23:00',
+            hourlyPrice: turfDef.hourlyPriceNight,
+            isActive: true,
+          },
+          {
+            turfId: turf.id,
+            sportId: primarySport.id,
+            ruleName: 'Weekend Rate',
+            dayType: 'WEEKEND',
+            startTime: '06:00',
+            endTime: '23:00',
+            hourlyPrice: turfDef.hourlyPriceWeekend,
+            isActive: true,
+          },
+        ],
+      });
+    }
+
     updatedCount++;
-    console.log(`  [${updatedCount}/${MADURAI_TURFS.length}] ${turf.name}: 5 images added (1 cover + 4 gallery).`);
+    console.log(`  [${updatedCount}/${MADURAI_TURFS.length}] ${turf.name}: sports (${turfDef.sports.join(', ')}), facilities, hours, and 5 images updated.`);
   }
 
   console.log(`\n🎉 All ${updatedCount} Madurai Turfs now have complete 5-image galleries and distinct cover thumbnails!`);
