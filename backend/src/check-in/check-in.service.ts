@@ -214,6 +214,11 @@ export class CheckInService {
         startTime: booking.startTime,
         endTime: booking.endTime,
         status: booking.status,
+        totalPrice: Number(booking.totalPrice),
+        paidAmount: Number(booking.paidAmount || 0),
+        remainingAmount: Number(booking.remainingAmount || 0),
+        paymentStatus: booking.paymentStatus || 'PAID',
+        isAdvanceBooking: Boolean(booking.isAdvanceBooking),
         isCheckedIn: Boolean(booking.checkedInAt),
         checkedInAt: booking.checkedInAt,
         isCheckedOut: Boolean(booking.checkedOutAt),
@@ -362,6 +367,15 @@ export class CheckInService {
         durationMinutes: booking.durationMinutes,
         status: booking.status,
         totalPrice: Number(booking.totalPrice),
+        paidAmount: Number(booking.paidAmount || 0),
+        remainingAmount: Number(booking.remainingAmount || 0),
+        paymentStatus: booking.paymentStatus || 'PAID',
+        isAdvanceBooking: Boolean(booking.isAdvanceBooking),
+        balanceDue: Number(booking.remainingAmount || 0),
+        balanceAlert:
+          Number(booking.remainingAmount || 0) > 0
+            ? `⚠️ Balance amount of ₹${booking.remainingAmount} is pending for this advance booking.`
+            : null,
         timeSlots: (booking as any).timeSlots || null,
       },
       customer: {
@@ -377,6 +391,8 @@ export class CheckInService {
         checkedOutAt: booking.checkedOutAt,
         canCheckIn,
         canCheckOut,
+        balanceDue: Number(booking.remainingAmount || 0),
+        paymentStatus: booking.paymentStatus || 'PAID',
       },
     };
   }
@@ -538,6 +554,11 @@ export class CheckInService {
         id: updated.id,
         bookingNumber: updated.bookingNumber,
         status: updated.status,
+        paidAmount: Number(updated.paidAmount || 0),
+        remainingAmount: Number(updated.remainingAmount || 0),
+        paymentStatus: updated.paymentStatus || 'PAID',
+        isAdvanceBooking: Boolean(updated.isAdvanceBooking),
+        balanceDue: Number(updated.remainingAmount || 0),
         checkedInAt: updated.checkedInAt,
         checkedInByUserId: updated.checkedInByUserId,
       },

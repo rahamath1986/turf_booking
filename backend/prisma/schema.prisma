@@ -369,6 +369,9 @@ model Turf {
   openTime           String    @default("06:00") @map("open_time") @db.VarChar(5)
   closeTime          String    @default("22:00") @map("close_time") @db.VarChar(5)
   slotDurationMinutes Int      @default(120) @map("slot_duration_minutes")
+  advancePaymentAllowed Boolean @default(true) @map("advance_payment_allowed")
+  minAdvancePercentage Decimal @default(20.00) @map("min_advance_percentage") @db.Decimal(5, 2)
+  minAdvanceAmount   Decimal   @default(0.00) @map("min_advance_amount") @db.Decimal(10, 2)
   createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt          DateTime? @map("deleted_at") @db.Timestamptz(6)
@@ -581,6 +584,9 @@ model SlotHold {
   expiresAt      DateTime   @map("expires_at") @db.Timestamptz(6)
   status         HoldStatus @default(ACTIVE)
   totalPrice     Decimal    @map("total_price") @db.Decimal(10, 2)
+  isAdvanceHold  Boolean    @default(false) @map("is_advance_hold")
+  advanceAmount  Decimal?   @map("advance_amount") @db.Decimal(10, 2)
+  minAdvanceAmount Decimal? @map("min_advance_amount") @db.Decimal(10, 2)
   idempotencyKey String?    @unique @map("idempotency_key") @db.VarChar(255)
   activeHoldKey  String?    @unique @map("active_hold_key") @db.VarChar(120)
   createdAt      DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
@@ -617,6 +623,11 @@ model Booking {
   taxAmount          Decimal       @default(0.00) @map("tax_amount") @db.Decimal(10, 2)
   discountAmount     Decimal       @default(0.00) @map("discount_amount") @db.Decimal(10, 2)
   totalPrice         Decimal       @map("total_price") @db.Decimal(10, 2)
+  isAdvanceBooking   Boolean       @default(false) @map("is_advance_booking")
+  advanceAmount      Decimal       @default(0.00) @map("advance_amount") @db.Decimal(10, 2)
+  paidAmount         Decimal       @default(0.00) @map("paid_amount") @db.Decimal(10, 2)
+  remainingAmount    Decimal       @default(0.00) @map("remaining_amount") @db.Decimal(10, 2)
+  paymentStatus      String        @default("PAID") @map("payment_status") @db.VarChar(30)
   cancellationReason String?       @map("cancellation_reason") @db.Text
   cancelledAt        DateTime?     @map("cancelled_at") @db.Timestamptz(6)
   rescheduledFromId  String?       @map("rescheduled_from_id") @db.Uuid
@@ -692,6 +703,7 @@ model Payment {
   amount         Decimal        @db.Decimal(10, 2)
   currency       String         @default("INR") @db.VarChar(10)
   status         PaymentStatus  @default(PENDING)
+  paymentType    String         @default("FULL") @map("payment_type") @db.VarChar(30)
   failureReason  String?        @map("failure_reason") @db.Text
   idempotencyKey String?        @unique @map("idempotency_key") @db.VarChar(255)
   metadata       Json?

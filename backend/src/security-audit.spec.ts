@@ -56,6 +56,7 @@ const mockPrisma = (): any => ({
     findFirst: jest.fn(),
     create: jest.fn(),
     update: jest.fn(),
+    updateMany: jest.fn().mockResolvedValue({ count: 0 }),
   },
   passwordResetToken: {
     findUnique: jest.fn(),

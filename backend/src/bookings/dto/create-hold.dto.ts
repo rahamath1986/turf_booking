@@ -80,4 +80,18 @@ export class CreateHoldDto {
   @IsOptional()
   @IsString()
   idempotencyKey?: string;
+
+  @ApiPropertyOptional({
+    description: 'Whether customer wants to hold slot for advance booking (minimum payment)',
+    example: true,
+  })
+  @IsOptional()
+  isAdvance?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Custom advance payment amount (must be >= minimum advance required)',
+    example: 500,
+  })
+  @IsOptional()
+  advanceAmount?: number;
 }

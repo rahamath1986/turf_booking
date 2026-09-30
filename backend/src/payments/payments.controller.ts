@@ -43,6 +43,25 @@ export class PaymentsController {
     return this.paymentsService.createOrder(userId, dto);
   }
 
+  @Post('booking/:id/complete-payment')
+  @ApiOperation({
+    summary: 'Create payment order to complete balance on an advance booking',
+    description:
+      'Initiates an order for remaining balance on an advance booking with the active payment provider.',
+  })
+  @ApiResponse({ status: 201, description: 'Order created successfully for remaining balance' })
+  @ApiResponse({ status: 400, description: 'Booking already fully paid' })
+  completeBookingPayment(
+    @CurrentUser('userId') userId: string,
+    @Param('id') bookingId: string,
+    @Body() dto: Partial<CreateOrderDto>,
+  ) {
+    return this.paymentsService.createOrder(userId, {
+      ...dto,
+      bookingId,
+    });
+  }
+
   @Post('verify')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({

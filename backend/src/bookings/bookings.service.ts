@@ -4,10 +4,11 @@ import {
   ForbiddenException,
   GoneException,
   Injectable,
+  Logger,
   NotFoundException,
   Optional,
 } from '@nestjs/common';
-import { BookingStatus, HoldStatus, Prisma } from '@prisma/client';
+import { BookingStatus, HoldStatus, PaymentStatus, Prisma } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import * as QRCode from 'qrcode';
 import { PrismaService } from '../database/prisma.service';
@@ -21,6 +22,12 @@ import { BookingQueryDto } from './dto/booking-query.dto';
 import { CalculateQuoteDto } from './dto/calculate-quote.dto';
 import { BookingTimeSlotDto } from './dto/booking-time-slot.dto';
 import { UpdateBookingDto } from './dto/update-booking.dto';
+import {
+  CompleteBookingPaymentDto,
+  PaymentMethodType,
+} from './dto/complete-payment.dto';
+import { PaymentsService } from '../payments/payments.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { Role } from '../common/enums/role.enum';
 
 export interface FeeBreakdownItem {
@@ -45,10 +52,14 @@ export interface FeeBreakdown {
 
 @Injectable()
 export class BookingsService {
+  private readonly logger = new Logger(BookingsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly availabilityService: AvailabilityService,
     @Optional() private readonly couponsService?: CouponsService,
+    @Optional() private readonly paymentsService?: PaymentsService,
+    @Optional() private readonly notificationsService?: NotificationsService,
   ) {}
 
   calculateFeeBreakdown(
@@ -453,7 +464,46 @@ export class BookingsService {
         totalCalculatedPrice += slotPrice;
       }
 
-      // 9. Create the SlotHold with 10-minute TTL
+      // 9. Calculate advance payment if requested or configured
+      const isAdvance = dto.isAdvance || dto.advanceAmount !== undefined;
+      const minPercentage = Number(turf.minAdvancePercentage ?? 20);
+      const minFixed = Number(turf.minAdvanceAmount ?? 0);
+      const calculatedMinAdvance = Math.min(
+        totalCalculatedPrice,
+        Math.max(
+          minFixed,
+          Math.round((totalCalculatedPrice * minPercentage) / 100),
+        ),
+      );
+
+      let holdAdvanceAmount: number | null = null;
+      let holdMinAdvanceAmount: number | null = null;
+
+      if (isAdvance) {
+        if (!turf.advancePaymentAllowed) {
+          throw new BadRequestException(
+            'Advance booking is not enabled for this turf venue',
+          );
+        }
+        holdMinAdvanceAmount = calculatedMinAdvance;
+        if (dto.advanceAmount !== undefined) {
+          if (dto.advanceAmount < calculatedMinAdvance) {
+            throw new BadRequestException(
+              `Advance payment must be at least ₹${calculatedMinAdvance} (${minPercentage}% of total ₹${totalCalculatedPrice})`,
+            );
+          }
+          if (dto.advanceAmount > totalCalculatedPrice) {
+            throw new BadRequestException(
+              `Advance payment cannot exceed total price of ₹${totalCalculatedPrice}`,
+            );
+          }
+          holdAdvanceAmount = dto.advanceAmount;
+        } else {
+          holdAdvanceAmount = calculatedMinAdvance;
+        }
+      }
+
+      // 10. Create the SlotHold with 10-minute TTL
       const ttlMinutes = 10;
       const expiresAt = new Date(Date.now() + ttlMinutes * 60 * 1000);
       const earliestStart = sortedSlots[0].startTime;
@@ -473,17 +523,30 @@ export class BookingsService {
           expiresAt,
           status: HoldStatus.ACTIVE,
           totalPrice: totalCalculatedPrice,
+          isAdvanceHold: isAdvance,
+          advanceAmount: holdAdvanceAmount,
+          minAdvanceAmount: holdMinAdvanceAmount,
           idempotencyKey: dto.idempotencyKey ?? null,
           activeHoldKey,
         } as any,
       });
 
       const feeBreakdown = this.calculateFeeBreakdown(totalCalculatedPrice);
+      const advanceRemaining = isAdvance
+        ? Math.max(0, totalCalculatedPrice - (holdAdvanceAmount || 0))
+        : 0;
 
       return {
         ...hold,
         timeSlots: holdSlots,
         feeBreakdown,
+        advancePayment: {
+          isAdvanceHold: isAdvance,
+          advanceAllowed: Boolean(turf.advancePaymentAllowed),
+          advanceAmount: holdAdvanceAmount,
+          minAdvanceAmount: holdMinAdvanceAmount ?? calculatedMinAdvance,
+          remainingAmount: advanceRemaining,
+        },
       };
     });
   }
@@ -497,7 +560,15 @@ export class BookingsService {
       where: { id: holdId },
       include: {
         turf: {
-          select: { id: true, name: true, addressLine: true, city: true },
+          select: {
+            id: true,
+            name: true,
+            addressLine: true,
+            city: true,
+            advancePaymentAllowed: true,
+            minAdvancePercentage: true,
+            minAdvanceAmount: true,
+          },
         },
       },
     });
@@ -513,6 +584,20 @@ export class BookingsService {
       throw new ForbiddenException('You are not authorized to view this hold');
     }
 
+    const advanceRemaining = hold.isAdvanceHold
+      ? Math.max(0, Number(hold.totalPrice) - Number(hold.advanceAmount || 0))
+      : 0;
+
+    const advanceInfo = {
+      isAdvanceHold: hold.isAdvanceHold,
+      advanceAllowed: Boolean(hold.turf?.advancePaymentAllowed),
+      advanceAmount: hold.advanceAmount ? Number(hold.advanceAmount) : null,
+      minAdvanceAmount: hold.minAdvanceAmount
+        ? Number(hold.minAdvanceAmount)
+        : null,
+      remainingAmount: advanceRemaining,
+    };
+
     // Lazy expiration check
     if (hold.status === HoldStatus.ACTIVE && hold.expiresAt < new Date()) {
       const expired = await this.prisma.slotHold.update({
@@ -525,12 +610,14 @@ export class BookingsService {
       return {
         ...expired,
         feeBreakdown: this.calculateFeeBreakdown(Number(expired.totalPrice)),
+        advancePayment: advanceInfo,
       };
     }
 
     return {
       ...hold,
       feeBreakdown: this.calculateFeeBreakdown(Number(hold.totalPrice)),
+      advancePayment: advanceInfo,
     };
   }
 
@@ -605,6 +692,7 @@ export class BookingsService {
       let slotHoldId: string | null = null;
 
       let bookingSlots: { startTime: string; endTime: string; price: number; durationMinutes: number }[] = [];
+      let holdRecord: any = null;
 
       // FLOW A: Booking from active SlotHold
       if (dto.holdId) {
@@ -635,6 +723,7 @@ export class BookingsService {
           );
         }
 
+        holdRecord = hold;
         turfId = hold.turfId;
         bookingDateStr = this.formatDateIso(hold.holdDate);
         startTime = hold.startTime;
@@ -832,6 +921,70 @@ export class BookingsService {
       const activeSlotKey = `${turfId}_${bookingDateStr}_${bookingSlots.map((s) => s.startTime).join('_')}`.slice(0, 120);
       const bookingNumber = this.generateBookingNumber();
 
+      const isAdvance = Boolean(
+        dto.isAdvanceBooking ||
+        dto.advancePaymentAmount !== undefined ||
+        holdRecord?.isAdvanceHold,
+      );
+
+      let advancePaid = 0;
+      let remainingBalance = 0;
+      let bookingPaymentStatus = 'PAID';
+
+      if (isAdvance) {
+        const turfEntity = await tx.turf.findUnique({
+          where: { id: turfId },
+          select: {
+            advancePaymentAllowed: true,
+            minAdvancePercentage: true,
+            minAdvanceAmount: true,
+          },
+        });
+
+        if (!turfEntity?.advancePaymentAllowed) {
+          throw new BadRequestException(
+            'Advance booking is not allowed for this turf venue',
+          );
+        }
+
+        const minPct = Number(turfEntity?.minAdvancePercentage ?? 20);
+        const minFixed = Number(turfEntity?.minAdvanceAmount ?? 0);
+        const minRequired = Math.min(
+          feeBreakdown.totalAmount,
+          Math.max(
+            minFixed,
+            Math.round((feeBreakdown.totalAmount * minPct) / 100),
+          ),
+        );
+
+        if (dto.advancePaymentAmount !== undefined) {
+          if (dto.advancePaymentAmount < minRequired) {
+            throw new BadRequestException(
+              `Advance payment must be at least ₹${minRequired} (${minPct}% of total ₹${feeBreakdown.totalAmount})`,
+            );
+          }
+          if (dto.advancePaymentAmount > feeBreakdown.totalAmount) {
+            throw new BadRequestException(
+              `Advance payment cannot exceed total amount of ₹${feeBreakdown.totalAmount}`,
+            );
+          }
+          advancePaid = dto.advancePaymentAmount;
+        } else if (holdRecord?.advanceAmount) {
+          advancePaid = Number(holdRecord.advanceAmount);
+        } else if (holdRecord?.minAdvanceAmount) {
+          advancePaid = Number(holdRecord.minAdvanceAmount);
+        } else {
+          advancePaid = minRequired;
+        }
+
+        remainingBalance = Math.max(0, feeBreakdown.totalAmount - advancePaid);
+        bookingPaymentStatus = remainingBalance <= 0 ? 'PAID' : 'PARTIALLY_PAID';
+      } else {
+        advancePaid = feeBreakdown.totalAmount;
+        remainingBalance = 0;
+        bookingPaymentStatus = 'PAID';
+      }
+
       const booking = await tx.booking.create({
         data: {
           bookingNumber,
@@ -851,6 +1004,11 @@ export class BookingsService {
           taxAmount: feeBreakdown.taxAmount,
           discountAmount: feeBreakdown.discountAmount,
           totalPrice: feeBreakdown.totalAmount,
+          isAdvanceBooking: isAdvance,
+          advanceAmount: isAdvance ? advancePaid : 0,
+          paidAmount: isAdvance ? advancePaid : feeBreakdown.totalAmount,
+          remainingAmount: remainingBalance,
+          paymentStatus: bookingPaymentStatus,
         } as any,
         include: {
           turf: {
@@ -875,9 +1033,11 @@ export class BookingsService {
           bookingId: booking.id,
           fromStatus: null,
           toStatus: BookingStatus.CONFIRMED,
-          reason: slotHoldId
-            ? 'Booking confirmed from temporary slot hold'
-            : 'Direct booking confirmed',
+          reason: isAdvance
+            ? `Advance booking confirmed with initial payment of ₹${advancePaid}. Remaining balance of ₹${remainingBalance} payable later.`
+            : slotHoldId
+              ? 'Booking confirmed from temporary slot hold'
+              : 'Direct booking confirmed',
           changedByUserId: userId,
         },
       });
@@ -898,7 +1058,11 @@ export class BookingsService {
         timeSlots: bookingSlots,
         qrCodeDataUrl,
         paymentMethod: 'UPI',
-        paymentStatus: 'PAID',
+        paymentStatus: bookingPaymentStatus,
+        isAdvanceBooking: isAdvance,
+        advanceAmount: isAdvance ? advancePaid : 0,
+        paidAmount: isAdvance ? advancePaid : feeBreakdown.totalAmount,
+        remainingAmount: remainingBalance,
         feeBreakdown,
       };
     });
@@ -1066,6 +1230,44 @@ export class BookingsService {
       dto.customFeeItems,
     );
 
+    const turfEntity =
+      holdRecord?.turf?.advancePaymentAllowed !== undefined
+        ? holdRecord.turf
+        : await this.prisma.turf.findUnique({
+            where: { id: turfId },
+            select: {
+              advancePaymentAllowed: true,
+              minAdvancePercentage: true,
+              minAdvanceAmount: true,
+            },
+          });
+
+    const advanceAllowed = turfEntity?.advancePaymentAllowed ?? true;
+    const minPercentage = Number(turfEntity?.minAdvancePercentage ?? 20);
+    const minFixed = Number(turfEntity?.minAdvanceAmount ?? 0);
+    const calculatedMinAdvance = advanceAllowed
+      ? Math.min(
+          feeBreakdown.totalAmount,
+          Math.max(
+            minFixed,
+            Math.round((feeBreakdown.totalAmount * minPercentage) / 100),
+          ),
+        )
+      : feeBreakdown.totalAmount;
+    const remainingBalance = Math.max(
+      0,
+      feeBreakdown.totalAmount - calculatedMinAdvance,
+    );
+
+    const advancePayment = {
+      isEligible: advanceAllowed,
+      advanceAllowed,
+      minAdvancePercentage: minPercentage,
+      minAdvanceAmount: minFixed,
+      calculatedMinAdvance,
+      remainingAmount: remainingBalance,
+    };
+
     return {
       turfId,
       bookingDate: targetDateStr,
@@ -1077,6 +1279,7 @@ export class BookingsService {
       timeSlots: quoteSlots,
       coupon: couponDetails,
       feeBreakdown,
+      advancePayment,
     };
   }
 
@@ -1183,8 +1386,7 @@ export class BookingsService {
           select: { id: true, fullName: true, email: true, phone: true },
         },
         payments: {
-          orderBy: { createdAt: 'desc' },
-          take: 1,
+          orderBy: { createdAt: 'asc' },
         },
         statusHistory: {
           orderBy: { createdAt: 'asc' },
@@ -1223,13 +1425,18 @@ export class BookingsService {
       qrCodeDataUrl = null;
     }
 
-    const latestPayment = (booking as any).payments?.[0];
+    const paymentsList = (booking as any).payments || [];
+    const latestPayment = paymentsList.length > 0 ? paymentsList[paymentsList.length - 1] : null;
 
     return {
       ...booking,
       qrCodeDataUrl,
       paymentMethod: latestPayment?.provider || 'UPI',
-      paymentStatus: latestPayment?.status || 'PAID',
+      paymentStatus: booking.paymentStatus || latestPayment?.status || 'PAID',
+      isAdvanceBooking: Boolean(booking.isAdvanceBooking),
+      advanceAmount: Number(booking.advanceAmount || 0),
+      paidAmount: Number(booking.paidAmount || 0),
+      remainingAmount: Number(booking.remainingAmount || 0),
     };
   }
 
@@ -1713,6 +1920,196 @@ export class BookingsService {
       }
 
       return updated;
+    });
+  }
+
+  /**
+   * POST /api/v1/bookings/:id/complete-payment
+   * Completes or settles remaining balance payment for an advance booking.
+   * If paymentMethod is ONLINE: initiates a payment gateway order via PaymentsService.
+   * If paymentMethod is CASH, UPI, CARD: settles balance immediately at venue/counter,
+   * creates Payment record with status SUCCESS, zeroes remainingAmount, and updates status history.
+   */
+  async completePayment(
+    userId: string,
+    userRoles: string[],
+    id: string,
+    dto: CompleteBookingPaymentDto,
+  ) {
+    const booking = await this.prisma.booking.findUnique({
+      where: { id },
+      include: {
+        turf: { include: { owner: true } },
+        payments: { orderBy: { createdAt: 'desc' } },
+      },
+    });
+
+    if (!booking) {
+      throw new NotFoundException(`Booking with ID "${id}" not found`);
+    }
+
+    const isPlatformAdmin =
+      userRoles.includes(Role.SUPER_ADMIN) || userRoles.includes(Role.ADMIN);
+    const isTurfOwner = booking.turf.owner.userId === userId;
+    const isBookingCustomer = booking.userId === userId;
+
+    if (!isPlatformAdmin && !isTurfOwner && !isBookingCustomer) {
+      throw new ForbiddenException(
+        'You are not authorized to complete payment for this booking',
+      );
+    }
+
+    if (
+      booking.status === BookingStatus.CANCELLED ||
+      booking.status === BookingStatus.REFUNDED ||
+      booking.status === BookingStatus.EXPIRED
+    ) {
+      throw new BadRequestException(
+        `Cannot complete payment for a booking in "${booking.status}" status`,
+      );
+    }
+
+    const remainingAmount = Number(booking.remainingAmount);
+    if (remainingAmount <= 0 && booking.paymentStatus === 'PAID') {
+      throw new BadRequestException(
+        'Booking is already fully paid. No remaining balance due.',
+      );
+    }
+
+    const effectiveRemaining =
+      remainingAmount > 0
+        ? remainingAmount
+        : Math.max(0, Number(booking.totalPrice) - Number(booking.paidAmount));
+
+    const amountToPay = dto.amount
+      ? Math.min(dto.amount, effectiveRemaining)
+      : effectiveRemaining;
+
+    if (amountToPay <= 0) {
+      throw new BadRequestException('Payment amount must be greater than zero');
+    }
+
+    // 1. ONLINE payment flow (Razorpay/Stripe/Gateway Order)
+    if (!dto.paymentMethod || dto.paymentMethod === PaymentMethodType.ONLINE) {
+      if (!this.paymentsService) {
+        throw new BadRequestException(
+          'Payment gateway service is not available',
+        );
+      }
+      return this.paymentsService.createOrder(userId, {
+        bookingId: booking.id,
+        amount: amountToPay,
+        idempotencyKey: dto.idempotencyKey,
+      });
+    }
+
+    // 2. Direct / Offline settlement (CASH, UPI, CARD)
+    const paymentNumber = `PAY-BAL-${Date.now()}-${randomBytes(3).toString('hex').toUpperCase()}`;
+    const orderId = `settle_${Date.now()}_${randomBytes(4).toString('hex')}`;
+    const transactionId =
+      dto.transactionReference ||
+      `TXN-${Date.now()}-${randomBytes(3).toString('hex').toUpperCase()}`;
+
+    return this.prisma.$transaction(async (tx) => {
+      const payment = await tx.payment.create({
+        data: {
+          paymentNumber,
+          userId: booking.userId,
+          bookingId: booking.id,
+          provider: dto.paymentMethod || 'OFFLINE',
+          orderId,
+          transactionId,
+          amount: amountToPay,
+          currency: 'INR',
+          status: PaymentStatus.SUCCESS,
+          paymentType: 'BALANCE',
+          idempotencyKey: dto.idempotencyKey ?? null,
+          metadata: {
+            notes: dto.notes || 'Remaining balance settled',
+            settledByUserId: userId,
+            paymentMethod: dto.paymentMethod,
+          },
+        },
+      });
+
+      await tx.paymentStatusHistory.create({
+        data: {
+          paymentId: payment.id,
+          fromStatus: null,
+          toStatus: PaymentStatus.SUCCESS,
+          reason: `Balance settled via ${dto.paymentMethod}. Reference: ${transactionId}`,
+        },
+      });
+
+      const prevPaid = Number(booking.paidAmount || 0);
+      const newPaid = prevPaid + amountToPay;
+      const newRemaining = Math.max(0, Number(booking.totalPrice) - newPaid);
+      const newPaymentStatus = newRemaining <= 0 ? 'PAID' : 'PARTIALLY_PAID';
+
+      const updatedBooking = await tx.booking.update({
+        where: { id: booking.id },
+        data: {
+          paidAmount: newPaid,
+          remainingAmount: newRemaining,
+          paymentStatus: newPaymentStatus,
+        },
+        include: {
+          turf: {
+            select: { id: true, name: true, addressLine: true },
+          },
+        },
+      });
+
+      const isFullySettled = newRemaining <= 0;
+      await tx.bookingStatusHistory.create({
+        data: {
+          bookingId: booking.id,
+          fromStatus: booking.status,
+          toStatus: booking.status,
+          reason: isFullySettled
+            ? `Remaining balance of ₹${amountToPay} settled via ${dto.paymentMethod}. Booking is now fully paid.`
+            : `Partial balance of ₹${amountToPay} settled via ${dto.paymentMethod}. Remaining due: ₹${newRemaining}.`,
+          changedByUserId: userId,
+        },
+      });
+
+      if (this.notificationsService) {
+        this.notificationsService
+          .notifyPaymentSuccessful({
+            id: payment.id,
+            userId: booking.userId,
+            amount: amountToPay,
+            orderId: payment.orderId,
+            bookingId: booking.id,
+          })
+          .catch((err: any) =>
+            this.logger.error(`Notification failed: ${err.message}`),
+          );
+      }
+
+      return {
+        success: true,
+        message: isFullySettled
+          ? 'Booking payment completed in full!'
+          : `Partial balance of ₹${amountToPay} received. Remaining balance: ₹${newRemaining}`,
+        payment: {
+          id: payment.id,
+          paymentNumber: payment.paymentNumber,
+          amount: Number(payment.amount),
+          paymentMethod: payment.provider,
+          status: payment.status,
+          transactionId: payment.transactionId,
+        },
+        booking: {
+          id: updatedBooking.id,
+          bookingNumber: updatedBooking.bookingNumber,
+          totalPrice: Number(updatedBooking.totalPrice),
+          paidAmount: Number(updatedBooking.paidAmount),
+          remainingAmount: Number(updatedBooking.remainingAmount),
+          paymentStatus: updatedBooking.paymentStatus,
+          isAdvanceBooking: updatedBooking.isAdvanceBooking,
+        },
+      };
     });
   }
 }

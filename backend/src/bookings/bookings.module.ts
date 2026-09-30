@@ -5,9 +5,17 @@ import { BookingHoldsController } from './booking-holds.controller';
 import { AvailabilityModule } from '../availability/availability.module';
 import { RefundsModule } from '../refunds/refunds.module';
 import { CouponsModule } from '../coupons/coupons.module';
+import { PaymentsModule } from '../payments/payments.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
-  imports: [AvailabilityModule, RefundsModule, CouponsModule],
+  imports: [
+    AvailabilityModule,
+    RefundsModule,
+    CouponsModule,
+    PaymentsModule,
+    NotificationsModule,
+  ],
   controllers: [BookingsController, BookingHoldsController],
   providers: [BookingsService],
   exports: [BookingsService],

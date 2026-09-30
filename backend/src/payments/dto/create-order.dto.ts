@@ -46,4 +46,21 @@ export class CreateOrderDto {
   @IsOptional()
   @IsString()
   idempotencyKey?: string;
+
+  @ApiPropertyOptional({
+    description: 'Whether this order is an advance / minimum payment order for a slot hold',
+    example: true,
+  })
+  @IsOptional()
+  isAdvance?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Specific advance payment amount (must be >= minimum required advance payment for the turf)',
+    example: 500,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  advanceAmount?: number;
 }

@@ -73,11 +73,13 @@ export class PaymentsService {
     let calculatedAmount = dto.amount;
     let slotHoldId: string | null = null;
     let bookingId: string | null = null;
+    let paymentType = 'FULL';
 
     // A. Created for a SlotHold
     if (dto.holdId) {
       const hold = await this.prisma.slotHold.findUnique({
         where: { id: dto.holdId },
+        include: { turf: true },
       });
 
       if (!hold) {
@@ -103,9 +105,52 @@ export class PaymentsService {
       }
 
       slotHoldId = hold.id;
-      calculatedAmount = Number(hold.totalPrice);
+      const holdTotal = Number(hold.totalPrice);
+      const isAdvance =
+        dto.isAdvance ||
+        dto.advanceAmount !== undefined ||
+        hold.isAdvanceHold;
+
+      if (isAdvance) {
+        const turf = hold.turf;
+        if (!turf?.advancePaymentAllowed) {
+          throw new BadRequestException(
+            'Advance payment is not allowed for this turf venue',
+          );
+        }
+
+        const minPercentage = Number(turf?.minAdvancePercentage ?? 20);
+        const minFixed = Number(turf?.minAdvanceAmount ?? 0);
+        const calculatedMinAdvance = Math.min(
+          holdTotal,
+          Math.max(minFixed, Math.round((holdTotal * minPercentage) / 100)),
+        );
+
+        let advAmt =
+          dto.advanceAmount ||
+          (dto.isAdvance
+            ? dto.amount || (hold.advanceAmount ? Number(hold.advanceAmount) : calculatedMinAdvance)
+            : hold.advanceAmount ? Number(hold.advanceAmount) : calculatedMinAdvance);
+
+        if (advAmt < calculatedMinAdvance) {
+          throw new BadRequestException(
+            `Advance payment must be at least ₹${calculatedMinAdvance} (${minPercentage}% of total ₹${holdTotal})`,
+          );
+        }
+        if (advAmt > holdTotal) {
+          throw new BadRequestException(
+            `Advance payment cannot exceed total price of ₹${holdTotal}`,
+          );
+        }
+
+        calculatedAmount = advAmt;
+        paymentType = 'ADVANCE';
+      } else {
+        calculatedAmount = holdTotal;
+        paymentType = 'FULL';
+      }
     } else if (dto.bookingId) {
-      // B. Created for an existing pending Booking
+      // B. Created for an existing pending Booking or balance settlement on confirmed advance booking
       const booking = await this.prisma.booking.findUnique({
         where: { id: dto.bookingId },
       });
@@ -122,8 +167,36 @@ export class PaymentsService {
         );
       }
 
+      if (
+        booking.status === BookingStatus.CANCELLED ||
+        booking.status === BookingStatus.REFUNDED ||
+        booking.status === BookingStatus.EXPIRED
+      ) {
+        throw new BadRequestException(
+          `Cannot pay for a booking in "${booking.status}" status`,
+        );
+      }
+
+      const remainingAmount = Number(booking.remainingAmount);
+      if (remainingAmount <= 0 && booking.paymentStatus === 'PAID') {
+        throw new BadRequestException(
+          'Booking is already fully paid. No balance due.',
+        );
+      }
+
       bookingId = booking.id;
-      calculatedAmount = Number(booking.totalPrice);
+      if (dto.amount) {
+        if (dto.amount > remainingAmount && remainingAmount > 0) {
+          throw new BadRequestException(
+            `Payment amount of ₹${dto.amount} exceeds remaining balance of ₹${remainingAmount}`,
+          );
+        }
+        calculatedAmount = dto.amount;
+      } else {
+        calculatedAmount =
+          remainingAmount > 0 ? remainingAmount : Number(booking.totalPrice);
+      }
+      paymentType = 'BALANCE';
     } else if (!calculatedAmount) {
       throw new BadRequestException(
         'Either holdId, bookingId, or amount must be provided',
@@ -152,6 +225,7 @@ export class PaymentsService {
           amount: calculatedAmount,
           currency: dto.currency || 'INR',
           status: PaymentStatus.PENDING,
+          paymentType,
           idempotencyKey: dto.idempotencyKey ?? null,
         },
       });
@@ -305,6 +379,13 @@ export class PaymentsService {
             data: { status: HoldStatus.CONVERTED, activeHoldKey: null },
           });
 
+          const paidAmount = Number(payment.amount);
+          const holdTotal = Number(hold.totalPrice);
+          const isAdvance =
+            payment.paymentType === 'ADVANCE' || paidAmount < holdTotal;
+          const remainingAmount = Math.max(0, holdTotal - paidAmount);
+          const paymentStatus = remainingAmount <= 0 ? 'PAID' : 'PARTIALLY_PAID';
+
           // Create confirmed booking
           confirmedBooking = await tx.booking.create({
             data: {
@@ -316,10 +397,16 @@ export class PaymentsService {
               bookingDate: hold.holdDate,
               startTime: hold.startTime,
               endTime: hold.endTime,
+              timeSlots: (hold as any).timeSlots,
               status: BookingStatus.CONFIRMED,
               activeSlotKey,
               basePrice: hold.totalPrice,
               totalPrice: hold.totalPrice,
+              isAdvanceBooking: isAdvance,
+              advanceAmount: isAdvance ? paidAmount : 0,
+              paidAmount,
+              remainingAmount,
+              paymentStatus,
             },
           });
 
@@ -335,35 +422,53 @@ export class PaymentsService {
               bookingId: confirmedBooking.id,
               fromStatus: null,
               toStatus: BookingStatus.CONFIRMED,
-              reason: `Booking confirmed via verified payment ${payment.paymentNumber}`,
+              reason: isAdvance
+                ? `Advance booking confirmed with initial payment of ₹${paidAmount}. Remaining balance: ₹${remainingAmount}`
+                : `Booking confirmed via verified payment ${payment.paymentNumber}`,
               changedByUserId: userId,
             },
           });
         }
       } else if (payment.bookingId) {
-        // Case B: Confirm existing pending Booking
+        // Case B: Existing Booking (Customer completes balance payment)
         const booking = await tx.booking.findUnique({
           where: { id: payment.bookingId },
         });
 
-        if (booking && booking.status !== BookingStatus.CONFIRMED) {
+        if (booking) {
           const dateStr = this.formatDateIso(booking.bookingDate);
           const activeSlotKey = `${booking.turfId}_${dateStr}_${booking.startTime}`;
+
+          const paymentAmount = Number(payment.amount);
+          const prevPaid = Number(booking.paidAmount || 0);
+          const newPaid = prevPaid + paymentAmount;
+          const newRemaining = Math.max(
+            0,
+            Number(booking.totalPrice) - newPaid,
+          );
+          const newPaymentStatus =
+            newRemaining <= 0 ? 'PAID' : 'PARTIALLY_PAID';
 
           confirmedBooking = await tx.booking.update({
             where: { id: booking.id },
             data: {
               status: BookingStatus.CONFIRMED,
-              activeSlotKey,
+              activeSlotKey: booking.activeSlotKey || activeSlotKey,
+              paidAmount: newPaid,
+              remainingAmount: newRemaining,
+              paymentStatus: newPaymentStatus,
             },
           });
 
+          const isFullySettled = newRemaining <= 0;
           await tx.bookingStatusHistory.create({
             data: {
               bookingId: booking.id,
               fromStatus: booking.status,
               toStatus: BookingStatus.CONFIRMED,
-              reason: `Payment ${payment.paymentNumber} verified`,
+              reason: isFullySettled
+                ? `Balance payment of ₹${paymentAmount} completed via verified payment ${payment.paymentNumber}. Booking is now fully paid.`
+                : `Partial balance payment of ₹${paymentAmount} verified (${payment.paymentNumber}). Remaining balance: ₹${newRemaining}.`,
               changedByUserId: userId,
             },
           });
@@ -570,6 +675,14 @@ export class PaymentsService {
                 data: { status: HoldStatus.CONVERTED, activeHoldKey: null },
               });
 
+              const paidAmount = Number(payment.amount);
+              const holdTotal = Number(hold.totalPrice);
+              const isAdvance =
+                payment.paymentType === 'ADVANCE' || paidAmount < holdTotal;
+              const remainingAmount = Math.max(0, holdTotal - paidAmount);
+              const paymentStatus =
+                remainingAmount <= 0 ? 'PAID' : 'PARTIALLY_PAID';
+
               const newBooking = await tx.booking.create({
                 data: {
                   bookingNumber: this.generateBookingNumber(),
@@ -580,10 +693,16 @@ export class PaymentsService {
                   bookingDate: hold.holdDate,
                   startTime: hold.startTime,
                   endTime: hold.endTime,
+                  timeSlots: (hold as any).timeSlots,
                   status: BookingStatus.CONFIRMED,
                   activeSlotKey,
                   basePrice: hold.totalPrice,
                   totalPrice: hold.totalPrice,
+                  isAdvanceBooking: isAdvance,
+                  advanceAmount: isAdvance ? paidAmount : 0,
+                  paidAmount,
+                  remainingAmount,
+                  paymentStatus,
                 },
               });
 
@@ -597,7 +716,45 @@ export class PaymentsService {
                   bookingId: newBooking.id,
                   fromStatus: null,
                   toStatus: BookingStatus.CONFIRMED,
-                  reason: 'Webhook payment confirmed booking',
+                  reason: isAdvance
+                    ? `Webhook confirmed advance booking (Paid: ₹${paidAmount}, Balance: ₹${remainingAmount})`
+                    : 'Webhook payment confirmed booking',
+                },
+              });
+            }
+          } else if (payment.bookingId) {
+            // Settle balance for existing booking via webhook
+            const booking = await tx.booking.findUnique({
+              where: { id: payment.bookingId },
+            });
+            if (booking) {
+              const prevPaid = Number(booking.paidAmount || 0);
+              const newPaid = prevPaid + Number(payment.amount);
+              const newRemaining = Math.max(
+                0,
+                Number(booking.totalPrice) - newPaid,
+              );
+              const newPaymentStatus =
+                newRemaining <= 0 ? 'PAID' : 'PARTIALLY_PAID';
+
+              await tx.booking.update({
+                where: { id: booking.id },
+                data: {
+                  paidAmount: newPaid,
+                  remainingAmount: newRemaining,
+                  paymentStatus: newPaymentStatus,
+                },
+              });
+
+              await tx.bookingStatusHistory.create({
+                data: {
+                  bookingId: booking.id,
+                  fromStatus: booking.status,
+                  toStatus: booking.status,
+                  reason:
+                    newRemaining <= 0
+                      ? `Webhook confirmed balance payment of ₹${payment.amount}. Booking fully paid.`
+                      : `Webhook confirmed partial balance payment of ₹${payment.amount}. Remaining: ₹${newRemaining}.`,
                 },
               });
             }

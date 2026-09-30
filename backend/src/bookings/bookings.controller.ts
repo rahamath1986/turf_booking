@@ -24,6 +24,7 @@ import { RescheduleBookingDto } from './dto/reschedule-booking.dto';
 import { BookingQueryDto } from './dto/booking-query.dto';
 import { CalculateQuoteDto } from './dto/calculate-quote.dto';
 import { UpdateBookingDto } from './dto/update-booking.dto';
+import { CompleteBookingPaymentDto } from './dto/complete-payment.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 
@@ -242,5 +243,30 @@ export class BookingsController {
     @Body() dto: UpdateBookingDto,
   ) {
     return this.bookingsService.updateBooking(userId, userRoles, id, dto);
+  }
+
+  @Post(':id/complete-payment')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Complete remaining balance payment for an advance booking',
+    description:
+      'Settles remaining balance for advance bookings. If paymentMethod is ONLINE, returns a gateway payment order. If CASH/UPI/CARD, settles balance immediately, marks booking fully PAID, records payment transaction, and logs status history.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Balance payment completed or order initiated successfully',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Booking is already fully paid or invalid payment amount',
+  })
+  @ApiResponse({ status: 404, description: 'Booking not found' })
+  completePayment(
+    @CurrentUser('userId') userId: string,
+    @CurrentUser('roles') userRoles: string[],
+    @Param('id') id: string,
+    @Body() dto: CompleteBookingPaymentDto,
+  ) {
+    return this.bookingsService.completePayment(userId, userRoles, id, dto);
   }
 }

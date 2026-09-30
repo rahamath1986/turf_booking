@@ -727,6 +727,9 @@ export class TurfsService {
           openTime: dto.openTime || '06:00',
           closeTime: dto.closeTime || '22:00',
           slotDurationMinutes: dto.slotDurationMinutes ?? 120,
+          advancePaymentAllowed: dto.advancePaymentAllowed ?? true,
+          minAdvancePercentage: dto.minAdvancePercentage !== undefined ? new Prisma.Decimal(dto.minAdvancePercentage) : new Prisma.Decimal(20.0),
+          minAdvanceAmount: dto.minAdvanceAmount !== undefined ? new Prisma.Decimal(dto.minAdvanceAmount) : new Prisma.Decimal(0.0),
           isActive: true,
           // Platform admins can auto-approve; owners start pending
           isApproved: isPlatformAdmin,
@@ -945,6 +948,12 @@ export class TurfsService {
     if (dto.closeTime !== undefined) updateData.closeTime = dto.closeTime;
     if (dto.slotDurationMinutes !== undefined)
       updateData.slotDurationMinutes = dto.slotDurationMinutes;
+    if (dto.advancePaymentAllowed !== undefined)
+      updateData.advancePaymentAllowed = dto.advancePaymentAllowed;
+    if (dto.minAdvancePercentage !== undefined)
+      updateData.minAdvancePercentage = new Prisma.Decimal(dto.minAdvancePercentage);
+    if (dto.minAdvanceAmount !== undefined)
+      updateData.minAdvanceAmount = new Prisma.Decimal(dto.minAdvanceAmount);
     if (dto.latitude !== undefined) {
       updateData.latitude = dto.latitude
         ? new Prisma.Decimal(dto.latitude)

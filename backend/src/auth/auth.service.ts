@@ -361,6 +361,19 @@ export class AuthService {
   async sendOtp(dto: SendOtpDto) {
     const identifier = dto.identifier.trim();
 
+    // Check if an OTP was sent within the last 60 seconds
+    const recentOtp = await this.prisma.otpVerification.findFirst({
+      where: {
+        identifier,
+        purpose: dto.purpose,
+        createdAt: { gte: new Date(Date.now() - 60 * 1000) },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (recentOtp) {
+      throw new BadRequestException('Please wait at least 60 seconds before requesting another OTP');
+    }
+
     // Invalidate any previous pending OTPs for this identifier & purpose
     await this.prisma.otpVerification.updateMany({
       where: {

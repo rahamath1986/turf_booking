@@ -109,4 +109,18 @@ export class CreateBookingDto {
   @ValidateNested({ each: true })
   @Type(() => CustomFeeItemDto)
   customFeeItems?: CustomFeeItemDto[];
+
+  @ApiPropertyOptional({
+    description: 'Whether this is an advance booking (minimum payment) with balance paid later',
+    example: true,
+  })
+  @IsOptional()
+  isAdvanceBooking?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Advance payment amount paid up-front (must be >= minimum required advance)',
+    example: 500,
+  })
+  @IsOptional()
+  advancePaymentAmount?: number;
 }

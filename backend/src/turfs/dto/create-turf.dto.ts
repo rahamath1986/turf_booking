@@ -265,6 +265,36 @@ export class CreateTurfDto {
   @Max(720)
   slotDurationMinutes?: number = 120;
 
+  @ApiPropertyOptional({
+    example: true,
+    default: true,
+    description: 'Whether customer can book in advance with a minimum payment',
+  })
+  @IsOptional()
+  @IsBoolean()
+  advancePaymentAllowed?: boolean = true;
+
+  @ApiPropertyOptional({
+    example: 20,
+    default: 20,
+    description: 'Minimum advance payment percentage required to book (e.g. 20%)',
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  @Max(100)
+  minAdvancePercentage?: number = 20;
+
+  @ApiPropertyOptional({
+    example: 200,
+    default: 0,
+    description: 'Minimum absolute advance payment amount in currency units (e.g. ₹200)',
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  minAdvanceAmount?: number = 0;
+
   @ApiPropertyOptional({ type: [OperatingHourInputDto] })
   @IsOptional()
   @IsArray()
