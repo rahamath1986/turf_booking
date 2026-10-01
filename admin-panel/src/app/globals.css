@@ -1,0 +1,77 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+
+  body {
+    @apply bg-gray-950 text-gray-100 antialiased;
+    font-family: var(--font-sans);
+  }
+
+  /* Scrollbar styling */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply rounded-full bg-gray-700;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-gray-600;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-all hover:bg-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-danger {
+    @apply inline-flex items-center gap-2 rounded-lg bg-rose-600 px-4 py-2 text-sm font-medium text-white transition-all hover:bg-rose-500 focus:outline-none focus:ring-2 focus:ring-rose-500/50 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center gap-2 rounded-lg border border-gray-700 bg-gray-800 px-4 py-2 text-sm font-medium text-gray-300 transition-all hover:bg-gray-700 hover:text-white focus:outline-none focus:ring-2 focus:ring-gray-500/50;
+  }
+
+  .input-field {
+    @apply w-full rounded-lg border border-gray-700 bg-gray-800/50 px-4 py-2.5 text-sm text-white placeholder-gray-500 transition-colors focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/50;
+  }
+
+  .select-field {
+    @apply w-full appearance-none rounded-lg border border-gray-700 bg-gray-800/50 px-4 py-2.5 text-sm text-white transition-colors focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/50;
+  }
+
+  .card {
+    @apply rounded-xl border border-gray-800 bg-gray-900/50 p-6;
+  }
+
+  .table-container {
+    @apply overflow-x-auto rounded-xl border border-gray-800;
+  }
+
+  .table-container table {
+    @apply w-full text-left text-sm;
+  }
+
+  .table-container thead {
+    @apply border-b border-gray-800 bg-gray-900/80;
+  }
+
+  .table-container th {
+    @apply px-4 py-3 text-xs font-semibold uppercase tracking-wider text-gray-400;
+  }
+
+  .table-container td {
+    @apply whitespace-nowrap px-4 py-3 text-gray-300;
+  }
+
+  .table-container tbody tr {
+    @apply border-b border-gray-800/50 transition-colors hover:bg-gray-800/30;
+  }
+}

@@ -1,3 +1,32 @@
+# ==============================================================================
+# Turf Booking — Full-Stack Deploy (Postgres + Redis + NestJS API + Admin Panel)
+#
+# Usage:
+#   docker compose up --build -d        # build + start everything
+#   docker compose logs -f turf-api     # follow API logs (migrations run first)
+#   docker compose down                 # stop (data persists in volumes)
+#   docker compose down -v              # stop AND wipe databases
+#
+# URLs (local):
+#   Admin panel : http://localhost:3000
+#   API         : http://localhost:4000/api/v1   (health: /health)
+#   Postgres    : localhost:5434  (db turf_booking_db)
+#   Redis       : localhost:6380
+#
+# Knobs (export or put in a root .env file — NEVER commit real secrets):
+#   POSTGRES_PASSWORD   DB password (default: dev-only value below)
+#   JWT_ACCESS_SECRET   min 32 chars (REQUIRED override for non-dev deploys)
+#   JWT_REFRESH_SECRET  min 32 chars (REQUIRED override for non-dev deploys)
+#   CHECKIN_QR_SECRET   (REQUIRED override for non-dev deploys; boot fails without it)
+#   ADMIN_API_URL       browser-facing API base URL baked into the panel image
+#                       at build time, e.g. https://api.example.com/api/v1
+#   AZURE_BLOB_STORAGE_CONNECTION_STRING   enables turf image file uploads
+#
+# First-time data: seed from a local backend checkout (image has no devDeps):
+#   cd backend && DATABASE_URL=postgresql://turf_admin:<pw>@localhost:5434/turf_booking_db \
+#     npm run prisma:seed
+# ==============================================================================
+
 services:
   # Isolated PostgreSQL instance for Turf Booking platform
   # Follows enterprise Azure multi-database design: distinct database turf_booking_db
@@ -8,7 +37,7 @@ services:
     environment:
       POSTGRES_DB: turf_booking_db
       POSTGRES_USER: turf_admin
-      POSTGRES_PASSWORD: turf_secure_password_dev
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-turf_secure_password_dev}
     ports:
       - "5434:5432"
     volumes:
@@ -33,6 +62,60 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  # NestJS backend API. Applies pending Prisma migrations on boot, then starts.
+  turf-api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: turf-api
+    restart: unless-stopped
+    depends_on:
+      turf-postgres:
+        condition: service_healthy
+      turf-redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      API_PREFIX: api/v1
+      DATABASE_URL: postgresql://turf_admin:${POSTGRES_PASSWORD:-turf_secure_password_dev}@turf-postgres:5432/turf_booking_db?schema=public
+      REDIS_HOST: turf-redis
+      REDIS_PORT: 6379
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-dev-access-secret-replace-me-000000000000}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-dev-refresh-secret-replace-me-0000000000}
+      JWT_ACCESS_EXPIRATION: 15m
+      JWT_REFRESH_EXPIRATION: 7d
+      CHECKIN_QR_SECRET: ${CHECKIN_QR_SECRET:-dev-checkin-qr-secret-replace-me-00000000}
+      CORS_ORIGINS: http://localhost:3000,http://localhost:4000
+      AZURE_RESOURCE_GROUP: ${AZURE_RESOURCE_GROUP:-rg-sansamg-platform}
+      AZURE_BLOB_STORAGE_CONNECTION_STRING: ${AZURE_BLOB_STORAGE_CONNECTION_STRING:-}
+      AZURE_BLOB_CONTAINER_NAME: ${AZURE_BLOB_CONTAINER_NAME:-turf-media-uploads}
+      PAYMENT_GATEWAY_PROVIDER: ${PAYMENT_GATEWAY_PROVIDER:-mock}
+    ports:
+      - "4000:4000"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:4000/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  # Next.js super-admin panel. NEXT_PUBLIC_API_URL is inlined at BUILD time —
+  # change ADMIN_API_URL then rebuild to point the panel at another backend.
+  turf-admin:
+    build:
+      context: ./admin-panel
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${ADMIN_API_URL:-http://localhost:4000/api/v1}
+    container_name: turf-admin
+    restart: unless-stopped
+    depends_on:
+      turf-api:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
 
 volumes:
   turf_pgdata:

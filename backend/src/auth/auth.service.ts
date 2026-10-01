@@ -214,14 +214,16 @@ export class AuthService {
         },
       });
 
-      // If registered as TURF_OWNER, create initial turf_owners profile record
+      // If registered as TURF_OWNER, create initial turf_owners profile record.
+      // New owners default to UNVERIFIED (unapproved) and INACTIVE until a
+      // SUPER_ADMIN / ADMIN explicitly approves them from the admin panel.
       if (targetRoleName === RoleEnum.TURF_OWNER) {
         await tx.turfOwner.create({
           data: {
             userId: createdUser.id,
             businessName: `${createdUser.fullName}'s Sports Arena`,
             isVerified: false,
-            isActive: true,
+            isActive: false,
           },
         });
       }

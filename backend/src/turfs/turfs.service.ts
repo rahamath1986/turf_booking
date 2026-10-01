@@ -78,11 +78,13 @@ export class TurfsService {
         throw new NotFoundException('Owner account not found');
       }
 
+      // Auto-provisioned profiles also default to UNVERIFIED and INACTIVE
+      // until explicitly approved by an admin.
       owner = await this.prisma.turfOwner.create({
         data: {
           userId,
           businessName: `${user.fullName}'s Sports Group`,
-          isActive: true,
+          isActive: false,
           isVerified: false,
         },
       });

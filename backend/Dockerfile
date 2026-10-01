@@ -48,9 +48,20 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/prisma ./prisma
 
+# Install the Prisma CLI (pinned to the repo's devDependency version) so the
+# container can apply pending migrations on boot. `npm prune` in the builder
+# stage removes devDependencies, hence this explicit install.
+RUN PRISMA_VERSION=$(node -p "require('./package.json').devDependencies.prisma") \
+  && npm install --no-save --no-audit --no-fund "prisma@$PRISMA_VERSION" \
+  && npm cache clean --force
+
 # Non-root user for container security
 USER node
 
 EXPOSE 4000
 
-CMD ["node", "dist/main"]
+HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=5 \
+  CMD node -e "fetch('http://localhost:4000/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+
+# Apply pending Prisma migrations, then start the API.
+CMD ["sh", "-c", "npx prisma migrate deploy && node dist/main"]

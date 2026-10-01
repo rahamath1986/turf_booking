@@ -7,6 +7,22 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { Prisma, BookingStatus } from '@prisma/client';
+import * as argon2 from 'argon2';
+import { Role } from '../common/enums/role.enum';
+import {
+  AdminCreateOwnerDto,
+  AdminUpdateOwnerDto,
+} from './dto/admin-owner.dto';
+import { AdminCreateUserDto } from './dto/admin-user.dto';
+import {
+  AdminAddTurfImageDto,
+  AdminCreateBookingDto,
+  AdminCreateTurfDto,
+  AdminUpdateTurfDto,
+} from './dto/admin-turf.dto';
+import { AvailabilityService } from '../availability/availability.service';
+import { UploadsService } from '../uploads/uploads.service';
+import { generateBookingNumber } from '../common/utils/booking-number.util';
 
 // ============================================================================
 // QUERY DTOs (inline for admin module)
@@ -52,7 +68,11 @@ export interface ReportQuery {
 export class AdminService {
   private readonly logger = new Logger(AdminService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly availabilityService: AvailabilityService,
+    private readonly uploadsService: UploadsService,
+  ) {}
 
   // ============================================================================
   // PLATFORM STATS
@@ -85,8 +105,10 @@ export class AdminService {
         },
         _sum: { totalPrice: true },
       }),
+      // New owners default to unverified AND inactive, so pending = all
+      // unverified (non-deleted) profiles awaiting admin approval.
       this.prisma.turfOwner.count({
-        where: { isVerified: false, isActive: true, deletedAt: null },
+        where: { isVerified: false, deletedAt: null },
       }),
       this.prisma.turf.count({
         where: { isApproved: false, isActive: true, deletedAt: null },
@@ -163,6 +185,89 @@ export class AdminService {
       })),
       meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
+  }
+
+  async createUser(dto: AdminCreateUserDto, adminId: string) {
+    const normalizedEmail = dto.email.toLowerCase().trim();
+
+    const existingEmail = await this.prisma.user.findUnique({
+      where: { email: normalizedEmail },
+    });
+    if (existingEmail)
+      throw new ConflictException('Email address is already registered');
+
+    if (dto.phone) {
+      const existingPhone = await this.prisma.user.findUnique({
+        where: { phone: dto.phone },
+      });
+      if (existingPhone)
+        throw new ConflictException('Phone number is already registered');
+    }
+
+    const roleNames = dto.roles?.length ? [...new Set(dto.roles)] : [Role.CUSTOMER];
+    const roleRecords = await this.prisma.role.findMany({
+      where: { name: { in: roleNames } },
+    });
+    if (roleRecords.length !== roleNames.length) {
+      const found = new Set(roleRecords.map((r) => r.name));
+      const missing = roleNames.filter((r) => !found.has(r));
+      throw new BadRequestException(
+        `Unknown role(s): ${missing.join(', ')}. Run seed first.`,
+      );
+    }
+
+    const passwordHash = await argon2.hash(dto.password);
+    const fullName = dto.fullName.trim();
+
+    const user = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.user.create({
+        data: {
+          email: normalizedEmail,
+          phone: dto.phone ?? null,
+          fullName,
+          passwordHash,
+          isActive: dto.isActive ?? true,
+          isEmailVerified: false,
+          isPhoneVerified: false,
+        },
+      });
+
+      await tx.userRole.createMany({
+        data: roleRecords.map((r) => ({ userId: created.id, roleId: r.id })),
+      });
+
+      // Owners get an (unapproved, inactive) turf-owner profile so they show
+      // up in the admin approval queue right away.
+      if (roleNames.includes(Role.TURF_OWNER)) {
+        await tx.turfOwner.create({
+          data: {
+            userId: created.id,
+            businessName: `${fullName}'s Sports Arena`,
+            isVerified: false,
+            isActive: false,
+          },
+        });
+      }
+
+      return tx.user.findUniqueOrThrow({
+        where: { id: created.id },
+        select: {
+          id: true,
+          email: true,
+          phone: true,
+          fullName: true,
+          avatarUrl: true,
+          isActive: true,
+          isEmailVerified: true,
+          isPhoneVerified: true,
+          createdAt: true,
+          roles: { select: { role: { select: { name: true } } } },
+        },
+      });
+    });
+
+    this.logger.log(`Admin ${adminId} created user ${user.id}`);
+    return { ...user, roles: user.roles.map((r) => r.role.name) };
   }
 
   async getUserById(userId: string) {
@@ -311,6 +416,172 @@ export class AdminService {
 
     this.logger.log(`Admin ${adminId} suspended owner ${ownerId}: ${reason}`);
     return { message: 'Owner suspended' };
+  }
+
+  async createOwner(dto: AdminCreateOwnerDto, adminId: string) {
+    const normalizedEmail = dto.email.toLowerCase().trim();
+
+    const existingEmail = await this.prisma.user.findUnique({
+      where: { email: normalizedEmail },
+    });
+    if (existingEmail)
+      throw new ConflictException('Email address is already registered');
+
+    if (dto.phone) {
+      const existingPhone = await this.prisma.user.findUnique({
+        where: { phone: dto.phone },
+      });
+      if (existingPhone)
+        throw new ConflictException('Phone number is already registered');
+    }
+
+    const roleRecord = await this.prisma.role.findUnique({
+      where: { name: Role.TURF_OWNER },
+    });
+    if (!roleRecord)
+      throw new BadRequestException(
+        'TURF_OWNER role is not initialized in database. Run seed first.',
+      );
+
+    const passwordHash = await argon2.hash(dto.password);
+
+    // Admin-created owners default to UNVERIFIED and INACTIVE unless the
+    // admin explicitly opts them into verified/active at creation time.
+    const owner = await this.prisma.$transaction(async (tx) => {
+      const user = await tx.user.create({
+        data: {
+          email: normalizedEmail,
+          phone: dto.phone ?? null,
+          fullName: dto.fullName.trim(),
+          passwordHash,
+          isActive: true,
+          isEmailVerified: false,
+          isPhoneVerified: false,
+        },
+      });
+
+      await tx.userRole.create({
+        data: { userId: user.id, roleId: roleRecord.id },
+      });
+
+      return tx.turfOwner.create({
+        data: {
+          userId: user.id,
+          businessName:
+            dto.businessName?.trim() || `${dto.fullName.trim()}'s Sports Arena`,
+          legalName: dto.legalName?.trim() || null,
+          panNumber: dto.panNumber?.trim() || null,
+          gstNumber: dto.gstNumber?.trim() || null,
+          bankAccountNumber: dto.bankAccountNumber?.trim() || null,
+          bankIfsc: dto.bankIfsc?.trim() || null,
+          bankName: dto.bankName?.trim() || null,
+          isVerified: dto.isVerified ?? false,
+          isActive: dto.isActive ?? false,
+        },
+        include: {
+          user: {
+            select: {
+              id: true,
+              email: true,
+              fullName: true,
+              phone: true,
+              isActive: true,
+            },
+          },
+        },
+      });
+    });
+
+    this.logger.log(`Admin ${adminId} created owner ${owner.id}`);
+    return owner;
+  }
+
+  async updateOwner(
+    ownerId: string,
+    dto: AdminUpdateOwnerDto,
+    adminId: string,
+  ) {
+    const owner = await this.prisma.turfOwner.findFirst({
+      where: { id: ownerId, deletedAt: null },
+    });
+    if (!owner) throw new NotFoundException('Owner not found');
+
+    if (dto.phone) {
+      const existingPhone = await this.prisma.user.findUnique({
+        where: { phone: dto.phone },
+      });
+      if (existingPhone && existingPhone.id !== owner.userId)
+        throw new ConflictException('Phone number is already registered');
+    }
+
+    const profileData: Prisma.TurfOwnerUpdateInput = {};
+    const profileKeys = [
+      'businessName',
+      'legalName',
+      'panNumber',
+      'gstNumber',
+      'bankAccountNumber',
+      'bankIfsc',
+      'bankName',
+      'isVerified',
+      'isActive',
+    ] as const;
+    for (const key of profileKeys) {
+      const value = dto[key];
+      if (value === undefined) continue;
+      if (typeof value === 'string') {
+        const trimmed = value.trim();
+        // businessName is required — ignore empty strings for it.
+        if (key === 'businessName' && !trimmed) continue;
+        (profileData as Record<string, unknown>)[key] = trimmed || null;
+      } else {
+        (profileData as Record<string, unknown>)[key] = value;
+      }
+    }
+
+    const userData: Prisma.UserUpdateInput = {};
+    if (dto.fullName !== undefined) userData.fullName = dto.fullName.trim();
+    if (dto.phone !== undefined) userData.phone = dto.phone;
+
+    await this.prisma.$transaction(async (tx) => {
+      if (Object.keys(profileData).length > 0) {
+        await tx.turfOwner.update({ where: { id: ownerId }, data: profileData });
+      }
+      if (Object.keys(userData).length > 0) {
+        await tx.user.update({ where: { id: owner.userId }, data: userData });
+      }
+    });
+
+    this.logger.log(`Admin ${adminId} updated owner ${ownerId}`);
+    return this.getOwnerById(ownerId);
+  }
+
+  async deleteOwner(ownerId: string, reason: string, adminId: string) {
+    const owner = await this.prisma.turfOwner.findFirst({
+      where: { id: ownerId, deletedAt: null },
+    });
+    if (!owner) throw new NotFoundException('Owner not found');
+
+    // Soft delete: hide the profile, deactivate the login and all venues.
+    // Financial history (bookings, commissions, settlements) is preserved.
+    const now = new Date();
+    await this.prisma.$transaction(async (tx) => {
+      await tx.turfOwner.update({
+        where: { id: ownerId },
+        data: { isActive: false, isVerified: false, deletedAt: now },
+      });
+      await tx.user.update({
+        where: { id: owner.userId },
+        data: { isActive: false },
+      });
+      await tx.turf.updateMany({
+        where: { ownerId, deletedAt: null },
+        data: { isActive: false },
+      });
+    });
+
+    this.logger.log(`Admin ${adminId} deleted owner ${ownerId}: ${reason}`);
+    return { message: 'Owner deleted successfully' };
   }
 
   // ============================================================================
@@ -769,8 +1040,599 @@ export class AdminService {
   }
 
   // ============================================================================
+  // TURF MANAGEMENT (CREATE / UPDATE / IMAGES — on behalf of owners)
+  // ============================================================================
+
+  async createTurf(dto: AdminCreateTurfDto, adminId: string) {
+    const owner = await this.prisma.turfOwner.findFirst({
+      where: { id: dto.ownerId, deletedAt: null },
+    });
+    if (!owner) throw new NotFoundException('Owner not found');
+
+    const city = await this.prisma.city.findUnique({
+      where: { id: dto.cityId },
+    });
+    if (!city) throw new BadRequestException('City not found');
+
+    if (dto.areaId) {
+      const area = await this.prisma.area.findUnique({
+        where: { id: dto.areaId },
+      });
+      if (!area) throw new BadRequestException('Area not found');
+    }
+
+    await this.validateSportAndFacilityIds(dto.sportIds, dto.facilityIds);
+
+    const slug = await this.generateUniqueTurfSlug(dto.name);
+    const isApproved = dto.isApproved ?? true;
+    const isActive = dto.isActive ?? true;
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      const turf = await tx.turf.create({
+        data: {
+          ownerId: owner.id,
+          cityId: dto.cityId,
+          areaId: dto.areaId ?? null,
+          name: dto.name.trim(),
+          slug,
+          description: dto.description?.trim() || null,
+          addressLine: dto.addressLine.trim(),
+          postalCode: dto.postalCode?.trim() || null,
+          latitude:
+            dto.latitude !== undefined && dto.latitude !== null
+              ? new Prisma.Decimal(dto.latitude)
+              : null,
+          longitude:
+            dto.longitude !== undefined && dto.longitude !== null
+              ? new Prisma.Decimal(dto.longitude)
+              : null,
+          contactPhone: dto.contactPhone?.trim() || null,
+          contactEmail: dto.contactEmail?.trim() || null,
+          coverImageUrl: dto.coverImageUrl?.trim() || null,
+          rules: dto.rules?.trim() || null,
+          cancellationPolicy: dto.cancellationPolicy?.trim() || null,
+          openTime: dto.openTime || '06:00',
+          closeTime: dto.closeTime || '22:00',
+          slotDurationMinutes: dto.slotDurationMinutes ?? 120,
+          advancePaymentAllowed: dto.advancePaymentAllowed ?? true,
+          minAdvancePercentage: new Prisma.Decimal(
+            dto.minAdvancePercentage ?? 20,
+          ),
+          minAdvanceAmount: new Prisma.Decimal(dto.minAdvanceAmount ?? 0),
+          isActive,
+          isApproved,
+          isFeatured: dto.isFeatured ?? false,
+        },
+      });
+
+      if (dto.sportIds?.length) {
+        await tx.turfSport.createMany({
+          data: dto.sportIds.map((sportId) => ({
+            turfId: turf.id,
+            sportId,
+            isActive: true,
+          })),
+          skipDuplicates: true,
+        });
+      }
+
+      if (dto.facilityIds?.length) {
+        await tx.turfFacility.createMany({
+          data: dto.facilityIds.map((facilityId) => ({
+            turfId: turf.id,
+            facilityId,
+            isActive: true,
+          })),
+          skipDuplicates: true,
+        });
+      }
+
+      if (dto.operatingHours?.length) {
+        await tx.operatingHour.createMany({
+          data: dto.operatingHours.map((h) => ({
+            turfId: turf.id,
+            dayOfWeek: h.dayOfWeek,
+            openTime: h.openTime,
+            closeTime: h.closeTime,
+            isClosed: h.isClosed ?? false,
+            slotDurationMinutes:
+              h.slotDurationMinutes ?? dto.slotDurationMinutes ?? 120,
+          })),
+        });
+      } else {
+        await tx.operatingHour.createMany({
+          data: Array.from({ length: 7 }, (_, dayOfWeek) => ({
+            turfId: turf.id,
+            dayOfWeek,
+            openTime: dto.openTime || '06:00',
+            closeTime: dto.closeTime || '22:00',
+            isClosed: false,
+            slotDurationMinutes: dto.slotDurationMinutes ?? 120,
+          })),
+        });
+      }
+
+      if (dto.pricingRules?.length) {
+        await tx.pricingRule.createMany({
+          data: dto.pricingRules.map((pr) => ({
+            turfId: turf.id,
+            sportId: pr.sportId ?? null,
+            ruleName: pr.ruleName,
+            dayType: pr.dayType || 'ALL',
+            dayOfWeek: pr.dayOfWeek ?? null,
+            startTime: pr.startTime,
+            endTime: pr.endTime,
+            hourlyPrice: new Prisma.Decimal(pr.hourlyPrice),
+            isActive: true,
+          })),
+        });
+      }
+
+      if (dto.images?.length) {
+        await tx.turfImage.createMany({
+          data: dto.images.map((img, idx) => ({
+            turfId: turf.id,
+            imageUrl: img.imageUrl,
+            caption: img.caption || null,
+            displayOrder: img.displayOrder ?? idx,
+            isCover: img.isCover ?? false,
+          })),
+        });
+      }
+
+      return turf;
+    });
+
+    this.logger.log(
+      `Admin ${adminId} created turf ${created.id} for owner ${owner.id}`,
+    );
+    return this.getTurfById(created.id);
+  }
+
+  async updateTurf(turfId: string, dto: AdminUpdateTurfDto, adminId: string) {
+    const turf = await this.prisma.turf.findFirst({
+      where: { id: turfId, deletedAt: null },
+    });
+    if (!turf) throw new NotFoundException('Turf not found');
+
+    if (dto.ownerId) {
+      const owner = await this.prisma.turfOwner.findFirst({
+        where: { id: dto.ownerId, deletedAt: null },
+      });
+      if (!owner) throw new NotFoundException('Owner not found');
+    }
+
+    if (dto.cityId) {
+      const city = await this.prisma.city.findUnique({
+        where: { id: dto.cityId },
+      });
+      if (!city) throw new BadRequestException('City not found');
+    }
+
+    if (dto.areaId) {
+      const area = await this.prisma.area.findUnique({
+        where: { id: dto.areaId },
+      });
+      if (!area) throw new BadRequestException('Area not found');
+    }
+
+    await this.validateSportAndFacilityIds(dto.sportIds, dto.facilityIds);
+
+    const scalar: Prisma.TurfUpdateInput = {};
+    const strKeys = [
+      'name',
+      'description',
+      'addressLine',
+      'postalCode',
+      'contactPhone',
+      'contactEmail',
+      'coverImageUrl',
+      'rules',
+      'cancellationPolicy',
+      'openTime',
+      'closeTime',
+    ] as const;
+    for (const key of strKeys) {
+      const value = dto[key];
+      if (value === undefined) continue;
+      if (key === 'name' || key === 'addressLine') {
+        if (!value.trim()) continue;
+        (scalar as Record<string, unknown>)[key] = value.trim();
+      } else {
+        (scalar as Record<string, unknown>)[key] = value.trim() || null;
+      }
+    }
+    if (dto.ownerId !== undefined)
+      scalar.owner = { connect: { id: dto.ownerId } };
+    if (dto.cityId !== undefined)
+      scalar.city = { connect: { id: dto.cityId } };
+    if (dto.areaId !== undefined)
+      scalar.area = dto.areaId
+        ? { connect: { id: dto.areaId } }
+        : { disconnect: true };
+    if (dto.latitude !== undefined)
+      scalar.latitude =
+        dto.latitude !== null ? new Prisma.Decimal(dto.latitude) : null;
+    if (dto.longitude !== undefined)
+      scalar.longitude =
+        dto.longitude !== null ? new Prisma.Decimal(dto.longitude) : null;
+    if (dto.slotDurationMinutes !== undefined)
+      scalar.slotDurationMinutes = dto.slotDurationMinutes;
+    if (dto.advancePaymentAllowed !== undefined)
+      scalar.advancePaymentAllowed = dto.advancePaymentAllowed;
+    if (dto.minAdvancePercentage !== undefined)
+      scalar.minAdvancePercentage = new Prisma.Decimal(
+        dto.minAdvancePercentage,
+      );
+    if (dto.minAdvanceAmount !== undefined)
+      scalar.minAdvanceAmount = new Prisma.Decimal(dto.minAdvanceAmount);
+    if (dto.isApproved !== undefined) scalar.isApproved = dto.isApproved;
+    if (dto.isActive !== undefined) scalar.isActive = dto.isActive;
+    if (dto.isFeatured !== undefined) scalar.isFeatured = dto.isFeatured;
+
+    await this.prisma.$transaction(async (tx) => {
+      if (Object.keys(scalar).length > 0) {
+        await tx.turf.update({ where: { id: turfId }, data: scalar });
+      }
+
+      // Replace semantics (same as owner flow) when lists are provided.
+      if (dto.sportIds !== undefined) {
+        await tx.turfSport.deleteMany({ where: { turfId } });
+        if (dto.sportIds.length > 0) {
+          await tx.turfSport.createMany({
+            data: dto.sportIds.map((sportId) => ({
+              turfId,
+              sportId,
+              isActive: true,
+            })),
+            skipDuplicates: true,
+          });
+        }
+      }
+
+      if (dto.facilityIds !== undefined) {
+        await tx.turfFacility.deleteMany({ where: { turfId } });
+        if (dto.facilityIds.length > 0) {
+          await tx.turfFacility.createMany({
+            data: dto.facilityIds.map((facilityId) => ({
+              turfId,
+              facilityId,
+              isActive: true,
+            })),
+            skipDuplicates: true,
+          });
+        }
+      }
+
+      if (dto.operatingHours !== undefined) {
+        await tx.operatingHour.deleteMany({ where: { turfId } });
+        if (dto.operatingHours.length > 0) {
+          await tx.operatingHour.createMany({
+            data: dto.operatingHours.map((h) => ({
+              turfId,
+              dayOfWeek: h.dayOfWeek,
+              openTime: h.openTime,
+              closeTime: h.closeTime,
+              isClosed: h.isClosed ?? false,
+              slotDurationMinutes:
+                h.slotDurationMinutes ?? dto.slotDurationMinutes ?? 120,
+            })),
+          });
+        }
+      }
+
+      if (dto.pricingRules !== undefined) {
+        await tx.pricingRule.deleteMany({ where: { turfId } });
+        if (dto.pricingRules.length > 0) {
+          await tx.pricingRule.createMany({
+            data: dto.pricingRules.map((pr) => ({
+              turfId,
+              sportId: pr.sportId ?? null,
+              ruleName: pr.ruleName,
+              dayType: pr.dayType || 'ALL',
+              dayOfWeek: pr.dayOfWeek ?? null,
+              startTime: pr.startTime,
+              endTime: pr.endTime,
+              hourlyPrice: new Prisma.Decimal(pr.hourlyPrice),
+              isActive: true,
+            })),
+          });
+        }
+      }
+    });
+
+    this.logger.log(`Admin ${adminId} updated turf ${turfId}`);
+    return this.getTurfById(turfId);
+  }
+
+  async addTurfImage(
+    turfId: string,
+    dto: AdminAddTurfImageDto,
+    adminId: string,
+  ) {
+    const turf = await this.prisma.turf.findFirst({
+      where: { id: turfId, deletedAt: null },
+    });
+    if (!turf) throw new NotFoundException('Turf not found');
+
+    const image = await this.prisma.$transaction(async (tx) => {
+      const maxOrder = await tx.turfImage.aggregate({
+        where: { turfId },
+        _max: { displayOrder: true },
+      });
+
+      if (dto.isCover) {
+        await tx.turfImage.updateMany({
+          where: { turfId },
+          data: { isCover: false },
+        });
+        await tx.turf.update({
+          where: { id: turfId },
+          data: { coverImageUrl: dto.imageUrl },
+        });
+      }
+
+      return tx.turfImage.create({
+        data: {
+          turfId,
+          imageUrl: dto.imageUrl,
+          caption: dto.caption?.trim() || null,
+          displayOrder: (maxOrder._max.displayOrder ?? -1) + 1,
+          isCover: dto.isCover ?? false,
+        },
+      });
+    });
+
+    this.logger.log(`Admin ${adminId} added image ${image.id} to turf ${turfId}`);
+    return image;
+  }
+
+  async uploadTurfImage(
+    turfId: string,
+    file: { buffer: Buffer; mimetype: string; originalname: string; size: number },
+    caption: string | undefined,
+    adminId: string,
+  ) {
+    const turf = await this.prisma.turf.findFirst({
+      where: { id: turfId, deletedAt: null },
+    });
+    if (!turf) throw new NotFoundException('Turf not found');
+
+    const existingCount = await this.prisma.turfImage.count({
+      where: { turfId },
+    });
+
+    const imageUrl = await this.uploadsService.uploadTurfImage(
+      file.buffer,
+      file.mimetype,
+      file.originalname,
+      file.size,
+    );
+
+    // First image automatically becomes the cover.
+    return this.addTurfImage(
+      turfId,
+      { imageUrl, caption, isCover: existingCount === 0 },
+      adminId,
+    );
+  }
+
+  async setTurfCoverImage(turfId: string, imageId: string, adminId: string) {
+    const image = await this.prisma.turfImage.findFirst({
+      where: { id: imageId, turfId },
+    });
+    if (!image) throw new NotFoundException('Turf image not found');
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.turfImage.updateMany({
+        where: { turfId },
+        data: { isCover: false },
+      });
+      await tx.turfImage.update({
+        where: { id: imageId },
+        data: { isCover: true },
+      });
+      await tx.turf.update({
+        where: { id: turfId },
+        data: { coverImageUrl: image.imageUrl },
+      });
+    });
+
+    this.logger.log(
+      `Admin ${adminId} set cover image ${imageId} for turf ${turfId}`,
+    );
+    return { message: 'Cover image updated successfully' };
+  }
+
+  async deleteTurfImage(turfId: string, imageId: string, adminId: string) {
+    const image = await this.prisma.turfImage.findFirst({
+      where: { id: imageId, turfId },
+    });
+    if (!image) throw new NotFoundException('Turf image not found');
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.turfImage.delete({ where: { id: imageId } });
+      if (image.isCover) {
+        await tx.turf.update({
+          where: { id: turfId },
+          data: { coverImageUrl: null },
+        });
+      }
+    });
+
+    this.logger.log(
+      `Admin ${adminId} deleted image ${imageId} from turf ${turfId}`,
+    );
+    return { message: 'Turf image deleted successfully' };
+  }
+
+  // ============================================================================
+  // BOOKING CREATION (on behalf of a customer)
+  // ============================================================================
+
+  async createBooking(dto: AdminCreateBookingDto, adminId: string) {
+    const user = await this.prisma.user.findFirst({
+      where: { id: dto.userId, deletedAt: null },
+    });
+    if (!user) throw new NotFoundException('User not found');
+    if (!user.isActive)
+      throw new BadRequestException('User account is deactivated');
+
+    const turf = await this.prisma.turf.findFirst({
+      where: { id: dto.turfId, deletedAt: null },
+    });
+    if (!turf) throw new NotFoundException('Turf not found');
+    if (!turf.isActive) throw new BadRequestException('Turf is inactive');
+
+    if (dto.sportId) {
+      const sport = await this.prisma.sport.findFirst({
+        where: { id: dto.sportId, isActive: true },
+      });
+      if (!sport) throw new BadRequestException('Sport not found');
+    }
+
+    const startMinutes = this.toMinutes(dto.startTime);
+    const endMinutes = this.toMinutes(dto.endTime);
+    if (!(endMinutes > startMinutes))
+      throw new BadRequestException('endTime must be after startTime');
+
+    // Reuse the live availability engine for closed-day + conflict + pricing.
+    const availability = await this.availabilityService.getAvailableSlots(
+      dto.turfId,
+      { date: dto.bookingDate, sportId: dto.sportId },
+    );
+    if (availability.isClosed)
+      throw new BadRequestException('Turf is closed on the selected date');
+
+    const overlapping = (availability.slots ?? []).filter(
+      (s) =>
+        this.toMinutes(s.startTime) < endMinutes &&
+        this.toMinutes(s.endTime) > startMinutes,
+    );
+    if (overlapping.length === 0)
+      throw new BadRequestException(
+        'No bookable slots found in the selected time range',
+      );
+
+    const blocked = overlapping.filter((s) => !s.isAvailable);
+    if (blocked.length > 0)
+      throw new ConflictException(
+        `Selected slot is not available (${blocked
+          .map((s) => `${s.startTime}-${s.endTime}`)
+          .join(', ')})`,
+      );
+
+    // Same fee model as the customer flow: 10% platform fee + 18% tax on fee.
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+    const basePrice = round2(
+      overlapping.reduce((sum, s) => sum + Number(s.price ?? 1000), 0),
+    );
+    const platformFee = round2(basePrice * 0.1);
+    const taxAmount = round2(platformFee * 0.18);
+    const totalPrice = round2(basePrice + platformFee + taxAmount);
+    const durationMinutes = overlapping.reduce(
+      (sum, s) => sum + (s.durationMinutes ?? 60),
+      0,
+    );
+
+    const bookingNumber = generateBookingNumber({
+      prefix: 'ADM',
+      turfName: turf.name,
+      bookingDate: dto.bookingDate,
+    });
+
+    const booking = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.booking.create({
+        data: {
+          bookingNumber,
+          userId: user.id,
+          turfId: turf.id,
+          sportId: dto.sportId ?? null,
+          bookingDate: new Date(dto.bookingDate),
+          startTime: dto.startTime,
+          endTime: dto.endTime,
+          durationMinutes,
+          timeSlots: overlapping.map((s) => ({
+            startTime: s.startTime,
+            endTime: s.endTime,
+            price: Number(s.price ?? 1000),
+          })),
+          status: BookingStatus.CONFIRMED,
+          basePrice: new Prisma.Decimal(basePrice),
+          taxAmount: new Prisma.Decimal(taxAmount),
+          discountAmount: new Prisma.Decimal(0),
+          totalPrice: new Prisma.Decimal(totalPrice),
+          isAdvanceBooking: false,
+          advanceAmount: new Prisma.Decimal(0),
+          paidAmount: new Prisma.Decimal(totalPrice),
+          remainingAmount: new Prisma.Decimal(0),
+          paymentStatus: 'PAID',
+        },
+      });
+
+      await tx.bookingStatusHistory.create({
+        data: {
+          bookingId: created.id,
+          fromStatus: null,
+          toStatus: BookingStatus.CONFIRMED,
+          reason: 'Booking created by admin on behalf of customer',
+          changedByUserId: adminId,
+        },
+      });
+
+      return created;
+    });
+
+    this.logger.log(
+      `Admin ${adminId} created booking ${booking.id} for user ${user.id}`,
+    );
+    return this.getBookingById(booking.id);
+  }
+
+  // ============================================================================
   // PRIVATE HELPERS
   // ============================================================================
+
+  private async validateSportAndFacilityIds(
+    sportIds?: string[],
+    facilityIds?: string[],
+  ) {
+    if (sportIds?.length) {
+      const count = await this.prisma.sport.count({
+        where: { id: { in: sportIds }, isActive: true },
+      });
+      if (count !== new Set(sportIds).size)
+        throw new BadRequestException('One or more sports are invalid');
+    }
+    if (facilityIds?.length) {
+      const count = await this.prisma.facility.count({
+        where: { id: { in: facilityIds }, isActive: true },
+      });
+      if (count !== new Set(facilityIds).size)
+        throw new BadRequestException('One or more facilities are invalid');
+    }
+  }
+
+  private async generateUniqueTurfSlug(name: string): Promise<string> {
+    const base =
+      name
+        .toLowerCase()
+        .trim()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '') || 'turf';
+    let slug = base;
+    let counter = 1;
+    while (await this.prisma.turf.findUnique({ where: { slug } })) {
+      slug = `${base}-${counter}`;
+      counter++;
+    }
+    return slug;
+  }
+
+  private toMinutes(time: string): number {
+    const [h, m] = time.split(':').map(Number);
+    return h * 60 + m;
+  }
 
   private groupKey(date: Date, groupBy: 'day' | 'week' | 'month'): string {
     const d = new Date(date);

@@ -327,7 +327,7 @@ model TurfOwner {
   bankIfsc          String?   @map("bank_ifsc") @db.VarChar(30)
   bankName          String?   @map("bank_name") @db.VarChar(100)
   isVerified        Boolean   @default(false) @map("is_verified")
-  isActive          Boolean   @default(true) @map("is_active")
+  isActive          Boolean   @default(false) @map("is_active")
   createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt         DateTime? @map("deleted_at") @db.Timestamptz(6)
