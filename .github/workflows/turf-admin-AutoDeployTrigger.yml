@@ -9,6 +9,7 @@ on:
     paths:
       - 'admin-panel/**'
       - '!admin-panel/**/*.md'
+      - '.github/workflows/turf-admin-AutoDeployTrigger.yml'
 
   # Allow manual trigger
   workflow_dispatch:
