@@ -20,6 +20,12 @@ import {
   AdminCreateTurfDto,
   AdminUpdateTurfDto,
 } from './dto/admin-turf.dto';
+import {
+  AdminCreateFacilityDto,
+  AdminCreateSportDto,
+  AdminUpdateFacilityDto,
+  AdminUpdateSportDto,
+} from './dto/admin-catalog.dto';
 import { AvailabilityService } from '../availability/availability.service';
 import { UploadsService } from '../uploads/uploads.service';
 import { generateBookingNumber } from '../common/utils/booking-number.util';
@@ -1590,6 +1596,246 @@ export class AdminService {
   }
 
   // ============================================================================
+  // CATALOG MANAGEMENT (sports + facilities)
+  // ============================================================================
+
+  async listSports() {
+    const items = await this.prisma.sport.findMany({
+      where: { deletedAt: null },
+      include: { _count: { select: { turfSports: true } } },
+      orderBy: { name: 'asc' },
+    });
+    return { items };
+  }
+
+  async createSport(dto: AdminCreateSportDto, adminId: string) {
+    const name = dto.name.trim();
+    const existing = await this.prisma.sport.findFirst({
+      where: { name: { equals: name, mode: 'insensitive' } },
+    });
+    if (existing) throw new ConflictException('Sport name already exists');
+
+    const slug = dto.slug?.trim() || this.slugify(name);
+    const slugTaken = await this.prisma.sport.findUnique({ where: { slug } });
+    if (slugTaken) throw new ConflictException('Sport slug already exists');
+
+    const minPlayers = dto.minPlayers ?? 2;
+    const maxPlayers = dto.maxPlayers ?? 22;
+    if (minPlayers > maxPlayers)
+      throw new BadRequestException('minPlayers cannot exceed maxPlayers');
+
+    const sport = await this.prisma.sport.create({
+      data: {
+        name,
+        slug,
+        description: dto.description?.trim() || null,
+        iconUrl: dto.iconUrl?.trim() || null,
+        minPlayers,
+        maxPlayers,
+        isActive: dto.isActive ?? true,
+      },
+    });
+
+    this.logger.log(`Admin ${adminId} created sport ${sport.id}`);
+    return sport;
+  }
+
+  async updateSport(sportId: string, dto: AdminUpdateSportDto, adminId: string) {
+    const sport = await this.prisma.sport.findFirst({
+      where: { id: sportId, deletedAt: null },
+    });
+    if (!sport) throw new NotFoundException('Sport not found');
+
+    const data: Prisma.SportUpdateInput = {};
+
+    if (dto.name !== undefined) {
+      const name = dto.name.trim();
+      if (!name) throw new BadRequestException('Sport name cannot be empty');
+      const clash = await this.prisma.sport.findFirst({
+        where: {
+          name: { equals: name, mode: 'insensitive' },
+          id: { not: sportId },
+        },
+      });
+      if (clash) throw new ConflictException('Sport name already exists');
+      data.name = name;
+      // Keep slug in sync when it wasn't explicitly provided.
+      if (dto.slug === undefined) {
+        const slug = this.slugify(name);
+        const slugClash = await this.prisma.sport.findFirst({
+          where: { slug, id: { not: sportId } },
+        });
+        if (slugClash)
+          throw new ConflictException(
+            'Generated slug already exists — provide slug explicitly',
+          );
+        data.slug = slug;
+      }
+    }
+
+    if (dto.slug !== undefined) {
+      const slug = dto.slug.trim();
+      const slugClash = await this.prisma.sport.findFirst({
+        where: { slug, id: { not: sportId } },
+      });
+      if (slugClash) throw new ConflictException('Sport slug already exists');
+      data.slug = slug;
+    }
+
+    if (dto.description !== undefined)
+      data.description = dto.description?.trim() || null;
+    if (dto.iconUrl !== undefined)
+      data.iconUrl = dto.iconUrl?.trim() || null;
+    if (dto.minPlayers !== undefined) data.minPlayers = dto.minPlayers;
+    if (dto.maxPlayers !== undefined) data.maxPlayers = dto.maxPlayers;
+    if (dto.isActive !== undefined) data.isActive = dto.isActive;
+
+    const minPlayers = (data.minPlayers ?? sport.minPlayers) as number;
+    const maxPlayers = (data.maxPlayers ?? sport.maxPlayers) as number;
+    if (minPlayers > maxPlayers)
+      throw new BadRequestException('minPlayers cannot exceed maxPlayers');
+
+    const updated = await this.prisma.sport.update({
+      where: { id: sportId },
+      data,
+    });
+
+    this.logger.log(`Admin ${adminId} updated sport ${sportId}`);
+    return updated;
+  }
+
+  async deleteSport(sportId: string, adminId: string) {
+    const sport = await this.prisma.sport.findFirst({
+      where: { id: sportId, deletedAt: null },
+    });
+    if (!sport) throw new NotFoundException('Sport not found');
+
+    // Soft delete: history (bookings, pricing rules) stays intact.
+    await this.prisma.sport.update({
+      where: { id: sportId },
+      data: { isActive: false, deletedAt: new Date() },
+    });
+
+    this.logger.log(`Admin ${adminId} deleted sport ${sportId}`);
+    return { message: 'Sport deleted successfully' };
+  }
+
+  async listFacilities() {
+    const items = await this.prisma.facility.findMany({
+      include: { _count: { select: { turfFacilities: true } } },
+      orderBy: { name: 'asc' },
+    });
+    return { items };
+  }
+
+  async createFacility(dto: AdminCreateFacilityDto, adminId: string) {
+    const name = dto.name.trim();
+    const existing = await this.prisma.facility.findFirst({
+      where: { name: { equals: name, mode: 'insensitive' } },
+    });
+    if (existing) throw new ConflictException('Facility name already exists');
+
+    const slug = dto.slug?.trim() || this.slugify(name);
+    const slugTaken = await this.prisma.facility.findUnique({ where: { slug } });
+    if (slugTaken)
+      throw new ConflictException('Facility slug already exists');
+
+    const facility = await this.prisma.facility.create({
+      data: {
+        name,
+        slug,
+        description: dto.description?.trim() || null,
+        iconUrl: dto.iconUrl?.trim() || null,
+        isActive: dto.isActive ?? true,
+      },
+    });
+
+    this.logger.log(`Admin ${adminId} created facility ${facility.id}`);
+    return facility;
+  }
+
+  async updateFacility(
+    facilityId: string,
+    dto: AdminUpdateFacilityDto,
+    adminId: string,
+  ) {
+    const facility = await this.prisma.facility.findUnique({
+      where: { id: facilityId },
+    });
+    if (!facility) throw new NotFoundException('Facility not found');
+
+    const data: Prisma.FacilityUpdateInput = {};
+
+    if (dto.name !== undefined) {
+      const name = dto.name.trim();
+      if (!name) throw new BadRequestException('Facility name cannot be empty');
+      const clash = await this.prisma.facility.findFirst({
+        where: {
+          name: { equals: name, mode: 'insensitive' },
+          id: { not: facilityId },
+        },
+      });
+      if (clash) throw new ConflictException('Facility name already exists');
+      data.name = name;
+      if (dto.slug === undefined) {
+        const slug = this.slugify(name);
+        const slugClash = await this.prisma.facility.findFirst({
+          where: { slug, id: { not: facilityId } },
+        });
+        if (slugClash)
+          throw new ConflictException(
+            'Generated slug already exists — provide slug explicitly',
+          );
+        data.slug = slug;
+      }
+    }
+
+    if (dto.slug !== undefined) {
+      const slug = dto.slug.trim();
+      const slugClash = await this.prisma.facility.findFirst({
+        where: { slug, id: { not: facilityId } },
+      });
+      if (slugClash)
+        throw new ConflictException('Facility slug already exists');
+      data.slug = slug;
+    }
+
+    if (dto.description !== undefined)
+      data.description = dto.description?.trim() || null;
+    if (dto.iconUrl !== undefined)
+      data.iconUrl = dto.iconUrl?.trim() || null;
+    if (dto.isActive !== undefined) data.isActive = dto.isActive;
+
+    const updated = await this.prisma.facility.update({
+      where: { id: facilityId },
+      data,
+    });
+
+    this.logger.log(`Admin ${adminId} updated facility ${facilityId}`);
+    return updated;
+  }
+
+  async deleteFacility(facilityId: string, adminId: string) {
+    const facility = await this.prisma.facility.findUnique({
+      where: { id: facilityId },
+    });
+    if (!facility) throw new NotFoundException('Facility not found');
+
+    const inUse = await this.prisma.turfFacility.count({
+      where: { facilityId },
+    });
+    if (inUse > 0)
+      throw new ConflictException(
+        `Facility is used by ${inUse} turf(s) — deactivate it instead of deleting`,
+      );
+
+    await this.prisma.facility.delete({ where: { id: facilityId } });
+
+    this.logger.log(`Admin ${adminId} deleted facility ${facilityId}`);
+    return { message: 'Facility deleted successfully' };
+  }
+
+  // ============================================================================
   // PRIVATE HELPERS
   // ============================================================================
 
@@ -1632,6 +1878,16 @@ export class AdminService {
   private toMinutes(time: string): number {
     const [h, m] = time.split(':').map(Number);
     return h * 60 + m;
+  }
+
+  private slugify(name: string): string {
+    return (
+      name
+        .toLowerCase()
+        .trim()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '') || 'item'
+    );
   }
 
   private groupKey(date: Date, groupBy: 'day' | 'week' | 'month'): string {

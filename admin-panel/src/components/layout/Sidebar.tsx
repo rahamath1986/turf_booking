@@ -10,6 +10,7 @@ import {
   HiOutlineMapPin,
   HiOutlineCalendarDays,
   HiOutlineDocumentChartBar,
+  HiOutlineTag,
   HiOutlineArrowRightOnRectangle,
 } from 'react-icons/hi2';
 
@@ -19,6 +20,7 @@ const navItems = [
   { href: '/owners', label: 'Owners', icon: HiOutlineBuildingStorefront },
   { href: '/turfs', label: 'Turfs', icon: HiOutlineMapPin },
   { href: '/bookings', label: 'Bookings', icon: HiOutlineCalendarDays },
+  { href: '/catalog', label: 'Catalog', icon: HiOutlineTag },
   { href: '/reports', label: 'Reports', icon: HiOutlineDocumentChartBar },
 ];
 

@@ -47,6 +47,12 @@ import {
   AdminCreateTurfDto,
   AdminUpdateTurfDto,
 } from './dto/admin-turf.dto';
+import {
+  AdminCreateFacilityDto,
+  AdminCreateSportDto,
+  AdminUpdateFacilityDto,
+  AdminUpdateSportDto,
+} from './dto/admin-catalog.dto';
 import { IsOptional, IsString, MaxLength } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -379,6 +385,86 @@ export class AdminController {
   // ============================================================================
   // REPORTS
   // ============================================================================
+
+  // ============================================================================
+  // CATALOG (sports + facilities)
+  // ============================================================================
+
+  @Get('sports')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'List all sports with turf usage counts' })
+  listSports() {
+    return this.adminService.listSports();
+  }
+
+  @Post('sports')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Create a sport' })
+  createSport(
+    @Body() dto: AdminCreateSportDto,
+    @CurrentUser('userId') adminId: string,
+  ) {
+    return this.adminService.createSport(dto, adminId);
+  }
+
+  @Patch('sports/:id')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Update a sport' })
+  updateSport(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AdminUpdateSportDto,
+    @CurrentUser('userId') adminId: string,
+  ) {
+    return this.adminService.updateSport(id, dto, adminId);
+  }
+
+  @Delete('sports/:id')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Soft-delete a sport' })
+  deleteSport(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser('userId') adminId: string,
+  ) {
+    return this.adminService.deleteSport(id, adminId);
+  }
+
+  @Get('facilities')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'List all facilities with turf usage counts' })
+  listFacilities() {
+    return this.adminService.listFacilities();
+  }
+
+  @Post('facilities')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Create a facility' })
+  createFacility(
+    @Body() dto: AdminCreateFacilityDto,
+    @CurrentUser('userId') adminId: string,
+  ) {
+    return this.adminService.createFacility(dto, adminId);
+  }
+
+  @Patch('facilities/:id')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Update a facility' })
+  updateFacility(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AdminUpdateFacilityDto,
+    @CurrentUser('userId') adminId: string,
+  ) {
+    return this.adminService.updateFacility(id, dto, adminId);
+  }
+
+  @Delete('facilities/:id')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Delete a facility (only when unused)' })
+  deleteFacility(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser('userId') adminId: string,
+  ) {
+    return this.adminService.deleteFacility(id, adminId);
+  }
 
   @Get('reports/revenue')
   @Roles(Role.ADMIN, Role.SUPER_ADMIN)
