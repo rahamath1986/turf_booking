@@ -193,15 +193,17 @@ export class TurfsService {
     }
 
     // Sorting
-    let orderBy: Prisma.TurfOrderByWithRelationInput = { createdAt: 'desc' };
+    let orderBy: Prisma.TurfOrderByWithRelationInput | undefined = { createdAt: 'desc' };
     const sortOrder = query.sortOrder || 'desc';
-
     if (query.sortBy === 'rating') {
       orderBy = { ratingAverage: sortOrder };
     } else if (query.sortBy === 'reviews') {
       orderBy = { totalReviews: sortOrder };
     } else if (query.sortBy === 'name') {
       orderBy = { name: sortOrder };
+    } else if (query.sortBy === 'distance') {
+      // No DB orderBy needed; sorting will be done in-memory after distance calculation
+      orderBy = undefined;
     }
 
     const [items, totalItems] = await Promise.all([
@@ -227,7 +229,7 @@ export class TurfsService {
             take: 1,
           },
         },
-        orderBy,
+        ...(orderBy ? { orderBy } : {}),
         skip,
         take: limit,
       }),
@@ -264,7 +266,15 @@ export class TurfsService {
         ...(distanceKm != null && { distanceKm, distance }),
       };
     });
-
+      // Apply in-memory sorting for distance if requested
+      if (query.sortBy === 'distance') {
+        enrichedItems.sort((a, b) => {
+          if (a.distanceKm == null && b.distanceKm == null) return 0;
+          if (a.distanceKm == null) return 1; // nulls last
+          if (b.distanceKm == null) return -1;
+          return sortOrder === 'asc' ? a.distanceKm - b.distanceKm : b.distanceKm - a.distanceKm;
+        });
+      }
     return {
       items: enrichedItems,
       meta: {

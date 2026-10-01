@@ -13,6 +13,7 @@ import { OwnerBookingQueryDto } from './dto/owner-booking-query.dto';
 import { CreateWalkInBookingDto } from './dto/create-walk-in-booking.dto';
 import { OwnerCancelBookingDto } from './dto/owner-cancel-booking.dto';
 import { OwnerRescheduleBookingDto } from './dto/owner-reschedule-booking.dto';
+import { generateBookingNumber } from '../common/utils/booking-number.util';
 
 @Injectable()
 export class OwnersService {
@@ -843,6 +844,8 @@ export class OwnersService {
       items: bookings.map((b) => ({
         id: b.id,
         bookingNumber: b.bookingNumber,
+        displayBookingId: b.bookingNumber,
+        displayId: b.bookingNumber,
         turfId: b.turfId,
         turfName: b.turf?.name,
         customer: {
@@ -991,11 +994,22 @@ export class OwnersService {
     // 4. Calculate price
     const finalPrice = dto.price !== undefined ? Number(dto.price) : 1000;
 
+    const turf = await this.prisma.turf.findFirst({
+      where: { id: dto.turfId },
+      select: { name: true },
+    });
+
+    const bookingNumber = generateBookingNumber({
+      prefix: 'WLK',
+      turfName: turf?.name,
+      bookingDate,
+    });
+
     // 5. Atomic Booking Creation
     const booking = await this.prisma.$transaction(async (tx) => {
       const created = await tx.booking.create({
         data: {
-          bookingNumber: `WLK-${Date.now().toString(36).toUpperCase()}`,
+          bookingNumber,
           userId: customerUser.id,
           turfId: dto.turfId,
           sportId: dto.sportId || null,
@@ -1035,6 +1049,8 @@ export class OwnersService {
       message: 'Walk-in booking created successfully',
       booking: {
         ...booking,
+        displayBookingId: booking.bookingNumber,
+        displayId: booking.bookingNumber,
         customerName: dto.customerName,
         customerPhone: dto.customerPhone,
         paymentMethod: dto.paymentMethod || 'CASH',

@@ -121,6 +121,47 @@ export class CheckInService {
   // APIS
   // ============================================================================
 
+  private async findBookingByIdOrNumber(
+    bookingId: string,
+    include?: any,
+  ): Promise<any> {
+    const isBookingNumber = /^(TB|ADV|WLK|BK)-/i.test(bookingId);
+    if (isBookingNumber && this.prisma.booking.findFirst) {
+      const byNumber = await this.prisma.booking.findFirst({
+        where: {
+          bookingNumber: { equals: bookingId, mode: 'insensitive' },
+          deletedAt: null,
+        },
+        include,
+      });
+      if (byNumber) return byNumber;
+    }
+
+    try {
+      if (this.prisma.booking.findUnique) {
+        const byId = await this.prisma.booking.findUnique({
+          where: { id: bookingId },
+          include,
+        });
+        if (byId) return byId;
+      }
+    } catch {
+      // Ignored for non-uuid inputs
+    }
+
+    if (this.prisma.booking.findFirst) {
+      return this.prisma.booking.findFirst({
+        where: {
+          bookingNumber: { equals: bookingId, mode: 'insensitive' },
+          deletedAt: null,
+        },
+        include,
+      });
+    }
+
+    return null;
+  }
+
   /**
    * GET /api/v1/bookings/:id/qr
    * Customer retrieves secure, scannable QR token and visual base64 QR code image
@@ -130,17 +171,14 @@ export class CheckInService {
     userId: string,
     userRoles: string[] = [],
   ) {
-    const booking = await this.prisma.booking.findUnique({
-      where: { id: bookingId },
-      include: {
-        turf: { select: { id: true, name: true, owner: true } },
-        sport: { select: { id: true, name: true } },
-        user: { select: { id: true, fullName: true, phone: true } },
-      },
+    const booking = await this.findBookingByIdOrNumber(bookingId, {
+      turf: { select: { id: true, name: true, owner: true } },
+      sport: { select: { id: true, name: true } },
+      user: { select: { id: true, fullName: true, phone: true } },
     });
 
     if (!booking) {
-      throw new NotFoundException(`Booking with ID '${bookingId}' not found`);
+      throw new NotFoundException(`Booking with ID or code '${bookingId}' not found`);
     }
 
     const isAdmin =
@@ -207,6 +245,8 @@ export class CheckInService {
       booking: {
         id: booking.id,
         bookingNumber: booking.bookingNumber,
+        displayBookingId: booking.bookingNumber,
+        displayId: booking.bookingNumber,
         turfId: booking.turfId,
         turfName: booking.turf.name,
         sportName: booking.sport?.name,
@@ -358,6 +398,8 @@ export class CheckInService {
       booking: {
         id: booking.id,
         bookingNumber: booking.bookingNumber,
+        displayBookingId: booking.bookingNumber,
+        displayId: booking.bookingNumber,
         turfId: booking.turfId,
         turfName: booking.turf.name,
         sportName: booking.sport?.name,
@@ -413,16 +455,13 @@ export class CheckInService {
       accuracy?: number;
     },
   ) {
-    const booking = await this.prisma.booking.findUnique({
-      where: { id: bookingId },
-      include: {
-        turf: { include: { owner: true } },
-        user: { select: { id: true, fullName: true, phone: true } },
-      },
+    const booking = await this.findBookingByIdOrNumber(bookingId, {
+      turf: { include: { owner: true } },
+      user: { select: { id: true, fullName: true, phone: true } },
     });
 
     if (!booking) {
-      throw new NotFoundException(`Booking with ID '${bookingId}' not found`);
+      throw new NotFoundException(`Booking with ID or code '${bookingId}' not found`);
     }
 
     // Authorization: Staff, Turf Owner, Admin, or the Customer themselves
@@ -503,7 +542,7 @@ export class CheckInService {
     const now = new Date();
     const updated = await this.prisma.$transaction(async (tx) => {
       const res = await tx.booking.update({
-        where: { id: bookingId },
+        where: { id: booking.id },
         data: {
           checkedInAt: now,
           checkedInByUserId: performedByUserId,
@@ -513,7 +552,7 @@ export class CheckInService {
       // Check-in audit record
       await tx.bookingCheckInAudit.create({
         data: {
-          bookingId,
+          bookingId: booking.id,
           turfId: booking.turfId,
           actionType: 'CHECK_IN',
           performedByUserId,
@@ -553,6 +592,8 @@ export class CheckInService {
       booking: {
         id: updated.id,
         bookingNumber: updated.bookingNumber,
+        displayBookingId: updated.bookingNumber,
+        displayId: updated.bookingNumber,
         status: updated.status,
         paidAmount: Number(updated.paidAmount || 0),
         remainingAmount: Number(updated.remainingAmount || 0),
@@ -581,15 +622,12 @@ export class CheckInService {
       accuracy?: number;
     },
   ) {
-    const booking = await this.prisma.booking.findUnique({
-      where: { id: bookingId },
-      include: {
-        turf: { include: { owner: true } },
-      },
+    const booking = await this.findBookingByIdOrNumber(bookingId, {
+      turf: { include: { owner: true } },
     });
 
     if (!booking) {
-      throw new NotFoundException(`Booking with ID '${bookingId}' not found`);
+      throw new NotFoundException(`Booking with ID or code '${bookingId}' not found`);
     }
 
     const isAdmin =
@@ -651,7 +689,7 @@ export class CheckInService {
     const now = new Date();
     const updated = await this.prisma.$transaction(async (tx) => {
       const res = await tx.booking.update({
-        where: { id: bookingId },
+        where: { id: booking.id },
         data: {
           checkedOutAt: now,
           checkedOutByUserId: performedByUserId,
@@ -661,7 +699,7 @@ export class CheckInService {
 
       await tx.bookingCheckInAudit.create({
         data: {
-          bookingId,
+          bookingId: booking.id,
           turfId: booking.turfId,
           actionType: 'CHECK_OUT',
           performedByUserId,
@@ -699,6 +737,8 @@ export class CheckInService {
       booking: {
         id: updated.id,
         bookingNumber: updated.bookingNumber,
+        displayBookingId: updated.bookingNumber,
+        displayId: updated.bookingNumber,
         status: updated.status,
         checkedInAt: updated.checkedInAt,
         checkedOutAt: updated.checkedOutAt,
@@ -716,21 +756,18 @@ export class CheckInService {
     userId: string,
     userRoles: string[] = [],
   ) {
-    const booking = await this.prisma.booking.findUnique({
-      where: { id: bookingId },
-      include: {
-        turf: { select: { id: true, name: true, owner: true } },
-        checkInAudits: {
-          orderBy: { performedAt: 'desc' },
-          include: {
-            performedBy: { select: { id: true, fullName: true, phone: true } },
-          },
+    const booking = await this.findBookingByIdOrNumber(bookingId, {
+      turf: { select: { id: true, name: true, owner: true } },
+      checkInAudits: {
+        orderBy: { performedAt: 'desc' },
+        include: {
+          performedBy: { select: { id: true, fullName: true, phone: true } },
         },
       },
     });
 
     if (!booking) {
-      throw new NotFoundException(`Booking with ID '${bookingId}' not found`);
+      throw new NotFoundException(`Booking with ID or code '${bookingId}' not found`);
     }
 
     const isAdmin =
@@ -747,8 +784,8 @@ export class CheckInService {
     const isCheckedIn = Boolean(booking.checkedInAt);
     const isCheckedOut = Boolean(booking.checkedOutAt);
 
-    const checkInAudit = booking.checkInAudits.find(
-      (a) => a.actionType === 'CHECK_IN',
+    const checkInAudit = (booking.checkInAudits || []).find(
+      (a: any) => a.actionType === 'CHECK_IN',
     );
     const checkInMeta: any = checkInAudit?.metadata || {};
     const checkInLocation = checkInMeta.userLocation || null;
@@ -757,6 +794,8 @@ export class CheckInService {
     return {
       bookingId: booking.id,
       bookingNumber: booking.bookingNumber,
+      displayBookingId: booking.bookingNumber,
+      displayId: booking.bookingNumber,
       turfName: booking.turf.name,
       status: booking.status,
       isCheckedIn,
@@ -767,7 +806,7 @@ export class CheckInService {
       isCheckedOut,
       checkedOutAt: booking.checkedOutAt,
       checkedOutByUserId: booking.checkedOutByUserId,
-      audits: booking.checkInAudits.map((a) => {
+      audits: (booking.checkInAudits || []).map((a: any) => {
         const meta: any = a.metadata || {};
         return {
           id: a.id,

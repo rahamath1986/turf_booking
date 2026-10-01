@@ -14,6 +14,7 @@ import { CreateOrderDto } from './dto/create-order.dto';
 import { VerifyPaymentDto } from './dto/verify-payment.dto';
 import { Role } from '../common/enums/role.enum';
 import { randomBytes } from 'crypto';
+import { generateBookingNumber as createMeaningfulBookingNumber } from '../common/utils/booking-number.util';
 
 import { NotificationsService } from '../notifications/notifications.service';
 
@@ -33,10 +34,12 @@ export class PaymentsService {
     return `PAY-${dateStr}-${randomHex}`;
   }
 
-  private generateBookingNumber(): string {
-    const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-    const randomHex = randomBytes(4).toString('hex').toUpperCase();
-    return `TB-${dateStr}-${randomHex}`;
+  private generateBookingNumber(options?: {
+    prefix?: 'TB' | 'ADV' | 'WLK' | string;
+    turfName?: string;
+    bookingDate?: Date | string;
+  }): string {
+    return createMeaningfulBookingNumber(options);
   }
 
   private formatDateIso(d: Date): string {
@@ -151,9 +154,33 @@ export class PaymentsService {
       }
     } else if (dto.bookingId) {
       // B. Created for an existing pending Booking or balance settlement on confirmed advance booking
-      const booking = await this.prisma.booking.findUnique({
-        where: { id: dto.bookingId },
-      });
+      const isBookingNumber = /^(TB|ADV|WLK|BK)-/i.test(dto.bookingId);
+      let booking: any = null;
+      if (isBookingNumber) {
+        booking = await this.prisma.booking.findFirst({
+          where: {
+            bookingNumber: { equals: dto.bookingId, mode: 'insensitive' },
+            deletedAt: null,
+          },
+        });
+      }
+      if (!booking) {
+        try {
+          booking = await this.prisma.booking.findUnique({
+            where: { id: dto.bookingId },
+          });
+        } catch {
+          // Ignore invalid uuid syntax
+        }
+      }
+      if (!booking) {
+        booking = await this.prisma.booking.findFirst({
+          where: {
+            bookingNumber: { equals: dto.bookingId, mode: 'insensitive' },
+            deletedAt: null,
+          },
+        });
+      }
 
       if (!booking) {
         throw new NotFoundException(
@@ -363,6 +390,7 @@ export class PaymentsService {
       if (payment.slotHoldId) {
         const hold = await tx.slotHold.findUnique({
           where: { id: payment.slotHoldId },
+          include: { turf: { select: { name: true } } },
         });
 
         if (hold && hold.status === HoldStatus.ACTIVE) {
@@ -386,10 +414,17 @@ export class PaymentsService {
           const remainingAmount = Math.max(0, holdTotal - paidAmount);
           const paymentStatus = remainingAmount <= 0 ? 'PAID' : 'PARTIALLY_PAID';
 
+          const prefix = isAdvance ? 'ADV' : 'TB';
+          const bookingNumber = this.generateBookingNumber({
+            prefix,
+            turfName: (hold as any)?.turf?.name,
+            bookingDate: hold.holdDate,
+          });
+
           // Create confirmed booking
           confirmedBooking = await tx.booking.create({
             data: {
-              bookingNumber: this.generateBookingNumber(),
+              bookingNumber,
               userId: payment.userId,
               turfId: hold.turfId,
               sportId: hold.sportId,
@@ -479,7 +514,13 @@ export class PaymentsService {
         verified: true,
         message: 'Payment verified and booking confirmed successfully',
         payment: updatedPayment,
-        booking: confirmedBooking,
+        booking: confirmedBooking
+          ? {
+              ...confirmedBooking,
+              displayBookingId: confirmedBooking.bookingNumber,
+              displayId: confirmedBooking.bookingNumber,
+            }
+          : null,
       };
     });
 
@@ -665,6 +706,7 @@ export class PaymentsService {
           if (payment.slotHoldId) {
             const hold = await tx.slotHold.findUnique({
               where: { id: payment.slotHoldId },
+              include: { turf: { select: { name: true } } },
             });
             if (hold && hold.status === HoldStatus.ACTIVE) {
               const holdDateStr = this.formatDateIso(hold.holdDate);
@@ -683,9 +725,16 @@ export class PaymentsService {
               const paymentStatus =
                 remainingAmount <= 0 ? 'PAID' : 'PARTIALLY_PAID';
 
+              const prefix = isAdvance ? 'ADV' : 'TB';
+              const bookingNumber = this.generateBookingNumber({
+                prefix,
+                turfName: (hold as any)?.turf?.name,
+                bookingDate: hold.holdDate,
+              });
+
               const newBooking = await tx.booking.create({
                 data: {
-                  bookingNumber: this.generateBookingNumber(),
+                  bookingNumber,
                   userId: payment.userId,
                   turfId: hold.turfId,
                   sportId: hold.sportId,

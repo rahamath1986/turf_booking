@@ -29,6 +29,10 @@ import {
 import { PaymentsService } from '../payments/payments.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { Role } from '../common/enums/role.enum';
+import {
+  generateBookingNumber as createMeaningfulBookingNumber,
+  parseBookingNumber,
+} from '../common/utils/booking-number.util';
 
 export interface FeeBreakdownItem {
   name: string;
@@ -124,15 +128,52 @@ export class BookingsService {
   // HELPER UTILITIES
   // ---------------------------------------------------------------------------
 
-  private generateBookingNumber(): string {
-    const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-    const randomHex = randomBytes(4).toString('hex').toUpperCase();
-    return `TB-${dateStr}-${randomHex}`;
+  private generateBookingNumber(options?: {
+    prefix?: 'TB' | 'ADV' | 'WLK' | string;
+    turfName?: string;
+    bookingDate?: Date | string;
+  }): string {
+    return createMeaningfulBookingNumber(options);
   }
 
   private generateHoldCode(): string {
     const randomHex = randomBytes(6).toString('hex').toUpperCase();
     return `HOLD-${randomHex}`;
+  }
+
+  private async findBookingByIdOrNumber(
+    idOrNumber: string,
+    include?: any,
+  ): Promise<any> {
+    const isBookingNumber = /^(TB|ADV|WLK|BK)-/i.test(idOrNumber);
+    if (isBookingNumber) {
+      const byNumber = await this.prisma.booking.findFirst({
+        where: {
+          bookingNumber: { equals: idOrNumber, mode: 'insensitive' },
+          deletedAt: null,
+        },
+        include,
+      });
+      if (byNumber) return byNumber;
+    }
+
+    try {
+      const byId = await this.prisma.booking.findUnique({
+        where: { id: idOrNumber },
+        include,
+      });
+      if (byId) return byId;
+    } catch {
+      // Ignored for non-uuid inputs
+    }
+
+    return this.prisma.booking.findFirst({
+      where: {
+        bookingNumber: { equals: idOrNumber, mode: 'insensitive' },
+        deletedAt: null,
+      },
+      include,
+    });
   }
 
   private formatDateIso(d: Date): string {
@@ -919,7 +960,6 @@ export class BookingsService {
       );
 
       const activeSlotKey = `${turfId}_${bookingDateStr}_${bookingSlots.map((s) => s.startTime).join('_')}`.slice(0, 120);
-      const bookingNumber = this.generateBookingNumber();
 
       const isAdvance = Boolean(
         dto.isAdvanceBooking ||
@@ -927,20 +967,27 @@ export class BookingsService {
         holdRecord?.isAdvanceHold,
       );
 
+      const turfEntity = await tx.turf.findUnique({
+        where: { id: turfId },
+        select: {
+          name: true,
+          advancePaymentAllowed: true,
+          minAdvancePercentage: true,
+          minAdvanceAmount: true,
+        },
+      });
+
+      const bookingNumber = this.generateBookingNumber({
+        prefix: isAdvance ? 'ADV' : 'TB',
+        turfName: turfEntity?.name,
+        bookingDate: targetDate,
+      });
+
       let advancePaid = 0;
       let remainingBalance = 0;
       let bookingPaymentStatus = 'PAID';
 
       if (isAdvance) {
-        const turfEntity = await tx.turf.findUnique({
-          where: { id: turfId },
-          select: {
-            advancePaymentAllowed: true,
-            minAdvancePercentage: true,
-            minAdvanceAmount: true,
-          },
-        });
-
         if (!turfEntity?.advancePaymentAllowed) {
           throw new BadRequestException(
             'Advance booking is not allowed for this turf venue',
@@ -1055,6 +1102,8 @@ export class BookingsService {
 
       return {
         ...booking,
+        displayBookingId: booking.bookingNumber,
+        displayId: booking.bookingNumber,
         timeSlots: bookingSlots,
         qrCodeDataUrl,
         paymentMethod: 'UPI',
@@ -1350,8 +1399,14 @@ export class BookingsService {
     const limit = query.limit ?? 10;
     const totalPages = Math.ceil(total / limit) || 1;
 
+    const formattedItems = items.map((item) => ({
+      ...item,
+      displayBookingId: item.bookingNumber,
+      displayId: item.bookingNumber,
+    }));
+
     return {
-      items,
+      items: formattedItems,
       meta: {
         page,
         limit,
@@ -1368,9 +1423,7 @@ export class BookingsService {
    * Retrieves full booking details including auditable status history.
    */
   async findOne(userId: string, userRoles: string[], id: string) {
-    const booking = await this.prisma.booking.findFirst({
-      where: { id, deletedAt: null },
-      include: {
+    const booking = await this.findBookingByIdOrNumber(id, {
         turf: {
           include: {
             owner: true,
@@ -1388,19 +1441,18 @@ export class BookingsService {
         payments: {
           orderBy: { createdAt: 'asc' },
         },
-        statusHistory: {
-          orderBy: { createdAt: 'asc' },
-          include: {
-            changedByUser: {
-              select: { id: true, fullName: true, email: true },
+          statusHistory: {
+            orderBy: { createdAt: 'asc' },
+            include: {
+              changedByUser: {
+                select: { id: true, fullName: true, email: true },
+              },
             },
           },
-        },
-      },
-    });
+        });
 
     if (!booking) {
-      throw new NotFoundException(`Booking with ID "${id}" not found`);
+      throw new NotFoundException(`Booking with ID or code "${id}" not found`);
     }
 
     const isPlatformAdmin =
@@ -1430,6 +1482,8 @@ export class BookingsService {
 
     return {
       ...booking,
+      displayBookingId: booking.bookingNumber,
+      displayId: booking.bookingNumber,
       qrCodeDataUrl,
       paymentMethod: latestPayment?.provider || 'UPI',
       paymentStatus: booking.paymentStatus || latestPayment?.status || 'PAID',
@@ -1445,24 +1499,16 @@ export class BookingsService {
    * Lightweight status inquiry endpoint.
    */
   async getBookingStatus(userId: string, userRoles: string[], id: string) {
-    const booking = await this.prisma.booking.findUnique({
-      where: { id },
-      select: {
-        id: true,
-        bookingNumber: true,
-        status: true,
-        userId: true,
-        updatedAt: true,
-        turf: {
-          select: {
-            owner: { select: { userId: true } },
-          },
+    const booking = await this.findBookingByIdOrNumber(id, {
+      turf: {
+        select: {
+          owner: { select: { userId: true } },
         },
       },
     });
 
     if (!booking) {
-      throw new NotFoundException(`Booking with ID "${id}" not found`);
+      throw new NotFoundException(`Booking with ID or code "${id}" not found`);
     }
 
     const isPlatformAdmin =
@@ -1479,6 +1525,8 @@ export class BookingsService {
     return {
       bookingId: booking.id,
       bookingNumber: booking.bookingNumber,
+      displayBookingId: booking.bookingNumber,
+      displayId: booking.bookingNumber,
       status: booking.status,
       updatedAt: booking.updatedAt,
     };
@@ -1936,16 +1984,13 @@ export class BookingsService {
     id: string,
     dto: CompleteBookingPaymentDto,
   ) {
-    const booking = await this.prisma.booking.findUnique({
-      where: { id },
-      include: {
-        turf: { include: { owner: true } },
-        payments: { orderBy: { createdAt: 'desc' } },
-      },
+    const booking = await this.findBookingByIdOrNumber(id, {
+      turf: { include: { owner: true } },
+      payments: { orderBy: { createdAt: 'desc' } },
     });
 
     if (!booking) {
-      throw new NotFoundException(`Booking with ID "${id}" not found`);
+      throw new NotFoundException(`Booking with ID or code "${id}" not found`);
     }
 
     const isPlatformAdmin =
@@ -2103,6 +2148,8 @@ export class BookingsService {
         booking: {
           id: updatedBooking.id,
           bookingNumber: updatedBooking.bookingNumber,
+          displayBookingId: updatedBooking.bookingNumber,
+          displayId: updatedBooking.bookingNumber,
           totalPrice: Number(updatedBooking.totalPrice),
           paidAmount: Number(updatedBooking.paidAmount),
           remainingAmount: Number(updatedBooking.remainingAmount),
