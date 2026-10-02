@@ -192,6 +192,45 @@ export class CouponsService {
       }
     }
 
+    // 9. Owner restriction check (owner-wise offers)
+    if (coupon.ownerIds && coupon.ownerIds.length > 0) {
+      if (!dto.turfId) {
+        return failure(`This coupon is restricted to selected turf owners`);
+      }
+      const venue = await this.prisma.turf.findUnique({
+        where: { id: dto.turfId },
+        select: { ownerId: true },
+      });
+      if (!venue || !coupon.ownerIds.includes(venue.ownerId)) {
+        return failure(`This coupon is not valid for the selected turf venue`);
+      }
+    }
+
+    // 10. Day-of-week validity check (e.g. weekend-only offers).
+    // Convention: 0=Sunday .. 6=Saturday (same as JS Date.getDay()).
+    if (coupon.validDays && coupon.validDays.length > 0) {
+      const refDate = dto.bookingDate ? new Date(dto.bookingDate) : now;
+      const dayNames = [
+        'Sunday',
+        'Monday',
+        'Tuesday',
+        'Wednesday',
+        'Thursday',
+        'Friday',
+        'Saturday',
+      ];
+      if (!coupon.validDays.includes(refDate.getDay())) {
+        const allowed = coupon.validDays
+          .slice()
+          .sort((a, b) => a - b)
+          .map((d) => dayNames[d])
+          .join(', ');
+        return failure(
+          `This coupon is only valid on ${allowed}`,
+        );
+      }
+    }
+
     // Calculation of discount
     let discount = 0;
     if (coupon.discountType === 'PERCENTAGE') {
@@ -298,6 +337,8 @@ export class CouponsService {
         totalUsageLimit: dto.totalUsageLimit ?? null,
         perUserLimit: dto.perUserLimit ?? 1,
         turfIds: dto.turfIds ?? [],
+        ownerIds: dto.ownerIds ?? [],
+        validDays: dto.validDays ?? [],
         sportTypes: dto.sportTypes
           ? dto.sportTypes.map((s) => s.toUpperCase())
           : [],
@@ -444,6 +485,8 @@ export class CouponsService {
           ? { perUserLimit: dto.perUserLimit }
           : {}),
         ...(dto.turfIds !== undefined ? { turfIds: dto.turfIds } : {}),
+        ...(dto.ownerIds !== undefined ? { ownerIds: dto.ownerIds } : {}),
+        ...(dto.validDays !== undefined ? { validDays: dto.validDays } : {}),
         ...(dto.sportTypes !== undefined
           ? { sportTypes: dto.sportTypes.map((s) => s.toUpperCase()) }
           : {}),

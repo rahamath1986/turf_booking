@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
+  IsDateString,
   IsNotEmpty,
   IsNumber,
   IsOptional,
@@ -42,4 +43,13 @@ export class ValidateCouponDto {
   @IsOptional()
   @IsString()
   sportType?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Booking date (YYYY-MM-DD) the coupon is evaluated against for day-of-week offers. Defaults to today.',
+    example: '2026-10-04',
+  })
+  @IsOptional()
+  @IsDateString()
+  bookingDate?: string;
 }

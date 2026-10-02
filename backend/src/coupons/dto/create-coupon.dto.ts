@@ -10,6 +10,8 @@ import {
   IsOptional,
   IsPositive,
   IsString,
+  IsUUID,
+  Max,
   Min,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -109,6 +111,28 @@ export class CreateCouponDto {
   @IsArray()
   @IsString({ each: true })
   turfIds?: string[];
+
+  @ApiPropertyOptional({
+    description:
+      'Specific turf-owner profile IDs eligible for this coupon. Empty means all owners (global).',
+    example: ['123e4567-e89b-12d3-a456-426614174000'],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsUUID('4', { each: true })
+  ownerIds?: string[];
+
+  @ApiPropertyOptional({
+    description:
+      'Days of week (0=Sunday..6=Saturday) this coupon is valid on. Empty means all days. Use [0,6] for weekend offers.',
+    example: [0, 6],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsInt({ each: true })
+  @Min(0, { each: true })
+  @Max(6, { each: true })
+  validDays?: number[];
 
   @ApiPropertyOptional({
     description:
