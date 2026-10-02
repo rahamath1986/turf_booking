@@ -40,8 +40,8 @@ export default function LoginPage() {
           <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 text-xl font-bold text-white shadow-lg shadow-emerald-500/20">
             TA
           </div>
-          <h1 className="text-2xl font-bold text-white">Turf Admin Panel</h1>
-          <p className="mt-1 text-sm text-gray-500">Sign in to access the super admin dashboard</p>
+          <h1 className="text-2xl font-bold text-white">Turf Booking Portal</h1>
+          <p className="mt-1 text-sm text-gray-500">Sign in — admins, owners and players each land in their own workspace</p>
         </div>
 
         {/* Form */}
@@ -90,7 +90,7 @@ export default function LoginPage() {
         </form>
 
         <p className="mt-6 text-center text-xs text-gray-600">
-          Only SUPER_ADMIN and ADMIN roles can access this panel.
+          Super admins open the control panel, owners open the studio, players open booking.
         </p>
       </div>
     </div>

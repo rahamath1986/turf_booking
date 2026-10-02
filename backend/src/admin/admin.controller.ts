@@ -4,6 +4,7 @@ import {
   Get,
   Post,
   Patch,
+  Put,
   Delete,
   Param,
   Body,
@@ -33,9 +34,18 @@ import {
   AdminTurfQueryDto,
   AdminBookingQueryDto,
   AdminReportQueryDto,
+  AdminReviewQueryDto,
+  AdminRefundQueryDto,
+  AdminProcessRefundDto,
   AdminActionReasonDto,
   AdminUpdateUserStatusDto,
+  AdminResetPasswordDto,
+  AdminAddTurfVideoDto,
+  AdminAssignStaffDto,
+  AdminBroadcastDto,
 } from './dto/admin-query.dto';
+import { SetAvailabilityDto } from '../availability/dto/set-operating-hours.dto';
+import { BlockSlotDto } from '../availability/dto/block-slot.dto';
 import {
   AdminCreateOwnerDto,
   AdminUpdateOwnerDto,
@@ -53,6 +63,16 @@ import {
   AdminUpdateFacilityDto,
   AdminUpdateSportDto,
 } from './dto/admin-catalog.dto';
+import {
+  AdminCreateAreaDto,
+  AdminCreateCityDto,
+  AdminCreateCountryDto,
+  AdminCreateStateDto,
+  AdminUpdateAreaDto,
+  AdminUpdateCityDto,
+  AdminUpdateCountryDto,
+  AdminUpdateStateDto,
+} from './dto/admin-location.dto';
 import { IsOptional, IsString, MaxLength } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -119,6 +139,27 @@ export class AdminController {
     @CurrentUser('userId') adminId: string,
   ) {
     return this.adminService.updateUserStatus(id, dto.isActive, adminId);
+  }
+
+  @Delete('users/:id')
+  @Roles(Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Soft-delete a user (SUPER_ADMIN only)' })
+  deleteUser(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser('userId') adminId: string,
+  ) {
+    return this.adminService.deleteUser(id, adminId);
+  }
+
+  @Post('users/:id/reset-password')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Reset a user password (revokes sessions)' })
+  resetUserPassword(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AdminResetPasswordDto,
+    @CurrentUser('userId') adminId: string,
+  ) {
+    return this.adminService.resetUserPassword(id, dto.newPassword, adminId);
   }
 
   // ============================================================================
@@ -304,6 +345,153 @@ export class AdminController {
     return this.adminService.setTurfCoverImage(id, imageId, adminId);
   }
 
+  @Post('turfs/:id/videos')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Attach a video URL to a turf' })
+  addTurfVideo(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AdminAddTurfVideoDto,
+    @CurrentUser('userId') adminId: string,
+  ) {
+    return this.adminService.addTurfVideo(id, dto, adminId);
+  }
+
+  @Post('turfs/:id/videos/upload')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Upload a turf video file (mp4/webm, 100MB)' })
+  @ApiConsumes('multipart/form-data')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 100 * 1024 * 1024 },
+      fileFilter: (_req, file: Express.Multer.File, cb) => {
+        if (['video/mp4', 'video/webm', 'video/quicktime'].includes(file.mimetype)) {
+          cb(null, true);
+        } else {
+          cb(new BadRequestException('Only MP4, WebM and QuickTime videos are allowed'), false);
+        }
+      },
+    }),
+  )
+  uploadTurfVideo(
+    @Param('id', ParseUUIDPipe) id: string,
+    @UploadedFile() file: Express.Multer.File | undefined,
+    @Body() body: AdminUploadTurfImageBodyDto,
+    @CurrentUser('userId') adminId: string,
+  ) {
+    if (!file) throw new BadRequestException('No video file uploaded');
+    return this.adminService.uploadTurfVideo(
+      id,
+      {
+        buffer: file.buffer,
+        mimetype: file.mimetype,
+        originalname: file.originalname,
+        size: file.size,
+      },
+      body?.caption,
+      adminId,
+    );
+  }
+
+  @Delete('turfs/:id/videos/:videoId')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Remove a video from a turf' })
+  deleteTurfVideo(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('videoId', ParseUUIDPipe) videoId: string,
+    @CurrentUser('userId') adminId: string,
+  ) {
+    return this.adminService.deleteTurfVideo(id, videoId, adminId);
+  }
+
+  @Get('turfs/:id/availability')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Get turf hours, blocks and pricing' })
+  getTurfAvailability(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser('userId') adminId: string,
+  ) {
+    return this.adminService.getTurfAvailability(id, adminId);
+  }
+
+  @Post('turfs/:id/availability')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Set turf hours and pricing' })
+  setTurfAvailability(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SetAvailabilityDto,
+    @CurrentUser('userId') adminId: string,
+  ) {
+    return this.adminService.setTurfAvailability(id, dto, adminId);
+  }
+
+  @Put('turfs/:id/availability')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Update turf hours and pricing' })
+  updateTurfAvailability(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SetAvailabilityDto,
+    @CurrentUser('userId') adminId: string,
+  ) {
+    return this.adminService.updateTurfAvailability(id, dto, adminId);
+  }
+
+  @Post('turfs/:id/blocks')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Block a slot on a turf' })
+  blockTurfSlot(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: BlockSlotDto,
+    @CurrentUser('userId') adminId: string,
+  ) {
+    return this.adminService.blockTurfSlot(id, dto, adminId);
+  }
+
+  @Delete('turfs/:id/blocks/:slotId')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Unblock a slot on a turf' })
+  unblockTurfSlot(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('slotId', ParseUUIDPipe) slotId: string,
+    @CurrentUser('userId') adminId: string,
+  ) {
+    return this.adminService.unblockTurfSlot(id, slotId, adminId);
+  }
+
+  // ============================================================================
+  // STAFF ASSIGNMENTS
+  // ============================================================================
+
+  @Get('staff-assignments')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'List staff/manager turf assignments' })
+  listStaff(@Query('ownerId') ownerId?: string) {
+    return this.adminService.listStaffAssignments(ownerId);
+  }
+
+  @Post('staff-assignments')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Assign a manager/staff user to an owner (optionally one turf)' })
+  assignStaff(@Body() dto: AdminAssignStaffDto, @CurrentUser('userId') adminId: string) {
+    return this.adminService.assignStaff(dto, adminId);
+  }
+
+  @Delete('staff-assignments/:id')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Revoke a staff assignment' })
+  revokeStaff(@Param('id', ParseUUIDPipe) id: string, @CurrentUser('userId') adminId: string) {
+    return this.adminService.revokeStaff(id, adminId);
+  }
+
+  @Post('notifications/broadcast')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Broadcast a system notification to users' })
+  broadcastNotification(
+    @Body() dto: AdminBroadcastDto,
+    @CurrentUser('userId') adminId: string,
+  ) {
+    return this.adminService.broadcastNotification(dto, adminId);
+  }
+
   @Delete('turfs/:id/images/:imageId')
   @Roles(Role.ADMIN, Role.SUPER_ADMIN)
   @ApiOperation({ summary: 'Remove an image from a turf gallery' })
@@ -387,6 +575,49 @@ export class AdminController {
   // ============================================================================
 
   // ============================================================================
+  // REVIEW MODERATION
+  // ============================================================================
+
+  @Get('reviews')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'List all reviews with filters' })
+  listReviews(@Query() query: AdminReviewQueryDto) {
+    return this.adminService.listReviews(query);
+  }
+
+  @Delete('reviews/:id')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Delete a review (re-syncs turf rating)' })
+  deleteReview(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser('userId') adminId: string,
+  ) {
+    return this.adminService.deleteReview(id, adminId);
+  }
+
+  // ============================================================================
+  // REFUND MANAGEMENT
+  // ============================================================================
+
+  @Get('refunds')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'List all refunds with filters' })
+  listRefunds(@Query() query: AdminRefundQueryDto) {
+    return this.adminService.listRefunds(query);
+  }
+
+  @Patch('refunds/:id/process')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Mark a refund COMPLETED or FAILED' })
+  processRefund(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AdminProcessRefundDto,
+    @CurrentUser('userId') adminId: string,
+  ) {
+    return this.adminService.processRefund(id, dto, adminId);
+  }
+
+  // ============================================================================
   // CATALOG (sports + facilities)
   // ============================================================================
 
@@ -464,6 +695,138 @@ export class AdminController {
     @CurrentUser('userId') adminId: string,
   ) {
     return this.adminService.deleteFacility(id, adminId);
+  }
+
+  // ============================================================================
+  // LOCATIONS (country > state > city > area)
+  // ============================================================================
+
+  @Get('locations/countries')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'List all countries' })
+  listCountries() {
+    return this.adminService.listCountries();
+  }
+
+  @Post('locations/countries')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Create a country' })
+  createCountry(@Body() dto: AdminCreateCountryDto, @CurrentUser('userId') adminId: string) {
+    return this.adminService.createCountry(dto, adminId);
+  }
+
+  @Patch('locations/countries/:id')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Update a country' })
+  updateCountry(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AdminUpdateCountryDto,
+    @CurrentUser('userId') adminId: string,
+  ) {
+    return this.adminService.updateCountry(id, dto, adminId);
+  }
+
+  @Delete('locations/countries/:id')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Delete a country (only when unused)' })
+  deleteCountry(@Param('id', ParseUUIDPipe) id: string, @CurrentUser('userId') adminId: string) {
+    return this.adminService.deleteCountry(id, adminId);
+  }
+
+  @Get('locations/states')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'List all states (optional countryId filter)' })
+  listStates(@Query('countryId') countryId?: string) {
+    return this.adminService.listStates(countryId);
+  }
+
+  @Post('locations/states')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Create a state' })
+  createState(@Body() dto: AdminCreateStateDto, @CurrentUser('userId') adminId: string) {
+    return this.adminService.createState(dto, adminId);
+  }
+
+  @Patch('locations/states/:id')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Update a state' })
+  updateState(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AdminUpdateStateDto,
+    @CurrentUser('userId') adminId: string,
+  ) {
+    return this.adminService.updateState(id, dto, adminId);
+  }
+
+  @Delete('locations/states/:id')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Delete a state (only when unused)' })
+  deleteState(@Param('id', ParseUUIDPipe) id: string, @CurrentUser('userId') adminId: string) {
+    return this.adminService.deleteState(id, adminId);
+  }
+
+  @Get('locations/cities-admin')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'List all cities incl. inactive (optional stateId filter)' })
+  listCitiesAdmin(@Query('stateId') stateId?: string) {
+    return this.adminService.listCities(stateId);
+  }
+
+  @Post('locations/cities')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Create a city' })
+  createCity(@Body() dto: AdminCreateCityDto, @CurrentUser('userId') adminId: string) {
+    return this.adminService.createCity(dto, adminId);
+  }
+
+  @Patch('locations/cities/:id')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Update a city' })
+  updateCity(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AdminUpdateCityDto,
+    @CurrentUser('userId') adminId: string,
+  ) {
+    return this.adminService.updateCity(id, dto, adminId);
+  }
+
+  @Delete('locations/cities/:id')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Delete a city (only when unused)' })
+  deleteCity(@Param('id', ParseUUIDPipe) id: string, @CurrentUser('userId') adminId: string) {
+    return this.adminService.deleteCity(id, adminId);
+  }
+
+  @Get('locations/areas-admin')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'List all areas incl. inactive (optional cityId filter)' })
+  listAreasAdmin(@Query('cityId') cityId?: string) {
+    return this.adminService.listAreas(cityId);
+  }
+
+  @Post('locations/areas')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Create an area' })
+  createArea(@Body() dto: AdminCreateAreaDto, @CurrentUser('userId') adminId: string) {
+    return this.adminService.createArea(dto, adminId);
+  }
+
+  @Patch('locations/areas/:id')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Update an area' })
+  updateArea(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AdminUpdateAreaDto,
+    @CurrentUser('userId') adminId: string,
+  ) {
+    return this.adminService.updateArea(id, dto, adminId);
+  }
+
+  @Delete('locations/areas/:id')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Delete an area (only when unused)' })
+  deleteArea(@Param('id', ParseUUIDPipe) id: string, @CurrentUser('userId') adminId: string) {
+    return this.adminService.deleteArea(id, adminId);
   }
 
   @Get('reports/revenue')

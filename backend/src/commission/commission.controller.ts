@@ -141,8 +141,8 @@ export class CommissionController {
   }
 
   @Post('admin/settlements/:id/process')
-  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
-  @ApiOperation({ summary: 'Mark a settlement as COMPLETED (Admin)' })
+  @Roles(Role.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Mark a settlement as COMPLETED (SUPER_ADMIN only)' })
   processSettlement(
     @Param('id', ParseUUIDPipe) settlementId: string,
     @Body() dto: ProcessSettlementDto,

@@ -80,6 +80,7 @@ export default function OffersPage() {
     try {
       const params: Record<string, string | number> = { page, limit: 20 };
       if (statusFilter) params.isActive = statusFilter;
+      if (search.trim()) params.search = search.trim();
       const { data: res } = await api.get('/admin/coupons', { params });
       setData(unwrap<PaginatedResponse<Coupon>>(res));
     } catch {
@@ -87,7 +88,7 @@ export default function OffersPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, statusFilter]);
+  }, [page, statusFilter, search]);
 
   useEffect(() => { loadCoupons(); }, [loadCoupons]);
 
@@ -118,9 +119,8 @@ export default function OffersPage() {
     loadRefs();
   }, []);
 
-  const filtered = (data?.items ?? []).filter((c) =>
-    search ? c.code.toLowerCase().includes(search.toLowerCase()) : true,
-  );
+  // Server-side search: backend filters by code across all pages.
+  const filtered = data?.items ?? [];
 
   function scopeBadges(c: Coupon) {
     const badges: string[] = [];
@@ -305,7 +305,7 @@ export default function OffersPage() {
             type="text"
             placeholder="Search by code…"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => { setSearch(e.target.value); setPage(1); }}
             className="input-field pl-10"
           />
         </div>

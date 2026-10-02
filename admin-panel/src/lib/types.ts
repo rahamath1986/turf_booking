@@ -34,12 +34,15 @@ export interface TurfOwner {
   _count?: { turfs: number };
   turfs?: TurfSummary[];
   commissionConfig?: CommissionConfig | null;
+  rejectionReason?: string | null;
 }
 
 export interface CommissionConfig {
   id: string;
-  ownerId: string;
-  commissionPercentage: number;
+  ownerId?: string;
+  turfOwnerId?: string;
+  commissionRate?: number;
+  commissionPercentage?: number;
   isActive: boolean;
 }
 
@@ -92,7 +95,9 @@ export interface Turf {
   _count?: { bookings: number; reviews?: number };
   turfSports?: { sport: { id: string; name: string } }[];
   turfFacilities?: { facility: { id: string; name: string } }[];
-  images?: { id: string; imageUrl: string; caption: string | null }[];
+  images?: { id: string; imageUrl: string; caption: string | null; isCover?: boolean; displayOrder?: number }[];
+  videos?: { id: string; videoUrl: string; thumbnailUrl: string | null; title: string | null; displayOrder?: number }[];
+  rejectionReason?: string | null;
 }
 
 export interface Booking {
@@ -130,6 +135,10 @@ export interface PlatformStats {
   bookings: { total: number; active: number };
   totalRevenue: number;
   pendingApprovals: { owners: number; turfs: number };
+  owners?: number;
+  refunds?: { total: number; totalAmount: number; pending?: number };
+  pendingSettlements?: number;
+  activeCoupons?: number;
 }
 
 export interface PaginatedResponse<T> {

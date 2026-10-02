@@ -101,6 +101,31 @@ export default function DashboardPage() {
           icon={<HiOutlineCheckBadge className="h-6 w-6" />}
           color="amber"
         />
+        <StatsCard
+          title="Total Owners"
+          value={stats?.owners ?? '—'}
+          icon={<HiOutlineBuildingOffice2 className="h-6 w-6" />}
+          color="purple"
+        />
+        <StatsCard
+          title="Refunds"
+          value={stats?.refunds ? `${stats.refunds.total} (₹${stats.refunds.totalAmount.toLocaleString()})` : '—'}
+          subtitle={stats?.refunds?.pending != null ? `${stats.refunds.pending} pending` : undefined}
+          icon={<HiOutlineBanknotes className="h-6 w-6" />}
+          color="rose"
+        />
+        <StatsCard
+          title="Pending Settlements"
+          value={stats?.pendingSettlements ?? '—'}
+          icon={<HiOutlineBanknotes className="h-6 w-6" />}
+          color="amber"
+        />
+        <StatsCard
+          title="Active Coupons"
+          value={stats?.activeCoupons ?? '—'}
+          icon={<HiOutlineCheckBadge className="h-6 w-6" />}
+          color="emerald"
+        />
       </div>
 
       {/* Quick Actions */}

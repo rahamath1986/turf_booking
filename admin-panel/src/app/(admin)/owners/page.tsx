@@ -47,6 +47,9 @@ export default function OwnersPage() {
   const [page, setPage] = useState(1);
   const [selectedOwner, setSelectedOwner] = useState<TurfOwner | null>(null);
   const [detailOwner, setDetailOwner] = useState<TurfOwner | null>(null);
+  const [commissionRate, setCommissionRate] = useState('');
+  const [commissionNotes, setCommissionNotes] = useState('');
+  const [commissionBusy, setCommissionBusy] = useState(false);
   const [actionReason, setActionReason] = useState('');
   const [actionModal, setActionModal] = useState<{ type: 'reject' | 'suspend'; ownerId: string } | null>(null);
   const [showCreate, setShowCreate] = useState(false);
@@ -112,12 +115,104 @@ export default function OwnersPage() {
     }
   }
 
+  interface StaffRow { id: string; user: { id: string; fullName: string; email: string }; turf?: { id: string; name: string } | null }
+  const [staff, setStaff] = useState<StaffRow[]>([]);
+  const [staffSearch, setStaffSearch] = useState('');
+  const [staffOptions, setStaffOptions] = useState<{ id: string; fullName: string; email: string; roles: string[] }[]>([]);
+  const [staffUserId, setStaffUserId] = useState('');
+  const [staffUserLabel, setStaffUserLabel] = useState('');
+  const [staffTurfId, setStaffTurfId] = useState('');
+  const [staffBusy, setStaffBusy] = useState(false);
+
   async function viewOwnerDetail(id: string) {
     try {
       const { data: detail } = await api.get(`/admin/owners/${id}`);
-      setDetailOwner(unwrap<TurfOwner>(detail));
+      const full = unwrap<TurfOwner>(detail);
+      setDetailOwner(full);
+      const current = full.commissionConfig?.commissionRate ?? full.commissionConfig?.commissionPercentage;
+      setCommissionRate(current != null ? String(Number(current)) : '');
+      setCommissionNotes('');
+      setStaffUserId('');
+      setStaffUserLabel('');
+      setStaffTurfId('');
+      try {
+        const { data: sres } = await api.get('/admin/staff-assignments', { params: { ownerId: id } });
+        setStaff(unwrap<{ items: StaffRow[] }>(sres).items ?? []);
+      } catch {
+        setStaff([]);
+      }
     } catch {
       toast.error('Failed to load owner details');
+    }
+  }
+
+  async function searchStaffUsers(q: string) {
+    setStaffSearch(q);
+    if (q.trim().length < 2) { setStaffOptions([]); return; }
+    try {
+      const { data: res } = await api.get('/admin/users', { params: { search: q.trim(), limit: 8 } });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const items = unwrap<{ items: any[] }>(res).items ?? [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      setStaffOptions(items.filter((u: any) => (u.roles || []).some((r: string) => ['MANAGER', 'STAFF', 'TURF_OWNER'].includes(r))));
+    } catch {
+      setStaffOptions([]);
+    }
+  }
+
+  async function assignStaff() {
+    if (!detailOwner || !staffUserId) { toast.error('Select a manager/staff user'); return; }
+    setStaffBusy(true);
+    try {
+      await api.post('/admin/staff-assignments', {
+        userId: staffUserId,
+        turfOwnerId: detailOwner.id,
+        ...(staffTurfId ? { turfId: staffTurfId } : {}),
+      });
+      toast.success('Staff assigned');
+      setStaffUserId('');
+      setStaffUserLabel('');
+      setStaffTurfId('');
+      viewOwnerDetail(detailOwner.id);
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      toast.error(msg || 'Assign failed');
+    } finally {
+      setStaffBusy(false);
+    }
+  }
+
+  async function revokeStaff(assignmentId: string) {
+    if (!detailOwner) return;
+    try {
+      await api.delete(`/admin/staff-assignments/${assignmentId}`);
+      toast.success('Assignment revoked');
+      viewOwnerDetail(detailOwner.id);
+    } catch {
+      toast.error('Revoke failed');
+    }
+  }
+
+  async function setCommission(ownerId: string) {
+    const rate = Number(commissionRate);
+    if (!Number.isFinite(rate) || rate < 0 || rate > 100) {
+      toast.error('Enter a rate between 0 and 100');
+      return;
+    }
+    setCommissionBusy(true);
+    try {
+      await api.put(`/admin/owners/${ownerId}/commission`, {
+        commissionRate: rate,
+        ...(commissionNotes.trim() ? { notes: commissionNotes.trim() } : {}),
+      });
+      toast.success(`Commission set to ${rate}%`);
+      viewOwnerDetail(ownerId);
+      loadOwners();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      toast.error(msg || 'Failed to set commission');
+    } finally {
+      setCommissionBusy(false);
     }
   }
 
@@ -375,6 +470,12 @@ export default function OwnersPage() {
               <div><p className="text-gray-500">Verified</p><Badge label={detailOwner.isVerified ? 'verified' : 'unverified'} /></div>
               <div><p className="text-gray-500">Status</p><Badge label={detailOwner.isActive ? 'active' : 'inactive'} /></div>
             </div>
+            {detailOwner.rejectionReason && (
+              <div className="rounded-lg border border-rose-500/20 bg-rose-500/5 p-4">
+                <p className="font-medium text-rose-400">Rejection Reason</p>
+                <p className="mt-1 text-sm text-gray-300">{detailOwner.rejectionReason}</p>
+              </div>
+            )}
             {detailOwner.turfs && detailOwner.turfs.length > 0 && (
               <div>
                 <p className="mb-2 font-medium text-gray-400">Turfs ({detailOwner.turfs.length})</p>
@@ -391,12 +492,79 @@ export default function OwnersPage() {
                 </div>
               </div>
             )}
-            {detailOwner.commissionConfig && (
-              <div>
-                <p className="text-gray-500">Commission Rate</p>
-                <p className="text-white">{detailOwner.commissionConfig.commissionPercentage}%</p>
+            <div className="rounded-lg border border-gray-800 bg-gray-800/30 p-4">
+              <p className="mb-2 font-medium text-gray-400">
+                Commission Rate {detailOwner.commissionConfig ? (
+                  <span className="text-white">
+                    ({Number(detailOwner.commissionConfig.commissionRate ?? detailOwner.commissionConfig.commissionPercentage ?? 10)}%)
+                  </span>
+                ) : (
+                  <span className="text-gray-500">(platform default 10%)</span>
+                )}
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  type="number" min={0} max={100} step={0.5}
+                  value={commissionRate}
+                  onChange={(e) => setCommissionRate(e.target.value)}
+                  placeholder="e.g. 12.5"
+                  className="input-field w-32"
+                />
+                <span className="text-gray-500">%</span>
+                <input
+                  value={commissionNotes}
+                  onChange={(e) => setCommissionNotes(e.target.value)}
+                  placeholder="Notes (optional)"
+                  className="input-field flex-1 min-w-[160px]"
+                />
+                <button onClick={() => setCommission(detailOwner.id)} disabled={commissionBusy} className="btn-primary py-2 text-xs">
+                  {commissionBusy ? 'Saving…' : 'Set Rate'}
+                </button>
               </div>
-            )}
+            </div>
+            <div className="rounded-lg border border-gray-800 bg-gray-800/30 p-4">
+              <p className="mb-2 font-medium text-gray-400">Assigned Managers / Staff ({staff.length})</p>
+              {staff.length > 0 && (
+                <div className="mb-3 space-y-1.5">
+                  {staff.map((s) => (
+                    <div key={s.id} className="flex items-center justify-between rounded-lg bg-gray-900/60 px-3 py-2 text-sm">
+                      <div>
+                        <p className="text-white">{s.user?.fullName} <span className="text-xs text-gray-500">{s.user?.email}</span></p>
+                        <p className="text-xs text-gray-500">{s.turf ? `Scoped: ${s.turf.name}` : 'All owner turfs'}</p>
+                      </div>
+                      <button onClick={() => revokeStaff(s.id)} className="text-xs text-rose-400 hover:text-rose-300">Revoke</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="relative">
+                <input
+                  value={staffUserId ? staffUserLabel : staffSearch}
+                  onChange={(e) => { setStaffUserId(''); setStaffUserLabel(''); searchStaffUsers(e.target.value); }}
+                  placeholder="Search manager/staff user…"
+                  className="input-field"
+                />
+                {staffOptions.length > 0 && !staffUserId && (
+                  <div className="absolute z-10 mt-1 max-h-40 w-full overflow-y-auto rounded-lg border border-gray-700 bg-gray-900 shadow-xl">
+                    {staffOptions.map((u) => (
+                      <button key={u.id} onClick={() => { setStaffUserId(u.id); setStaffUserLabel(u.fullName); setStaffOptions([]); setStaffSearch(''); }}
+                        className="block w-full px-3 py-2 text-left text-sm text-white hover:bg-gray-800">
+                        {u.fullName} <span className="ml-1 text-xs text-gray-500">{u.email}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              {(detailOwner.turfs ?? []).length > 0 && (
+                <select value={staffTurfId} onChange={(e) => setStaffTurfId(e.target.value)} className="select-field mt-2">
+                  <option value="">All owner turfs</option>
+                  {(detailOwner.turfs ?? []).map((t) => (<option key={t.id} value={t.id}>Only: {t.name}</option>))}
+                </select>
+              )}
+              <button onClick={assignStaff} disabled={staffBusy || !staffUserId} className="btn-secondary mt-2 text-xs disabled:opacity-50">
+                {staffBusy ? 'Assigning…' : 'Assign to this owner'}
+              </button>
+            </div>
           </div>
         )}
       </Modal>

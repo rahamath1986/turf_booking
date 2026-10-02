@@ -7,7 +7,8 @@ import Badge from '@/components/ui/Badge';
 import Modal from '@/components/ui/Modal';
 import LoadingSpinner from '@/components/ui/LoadingSpinner';
 import toast from 'react-hot-toast';
-import { HiOutlineMagnifyingGlass, HiOutlineEye, HiOutlinePlus } from 'react-icons/hi2';
+import { HiOutlineMagnifyingGlass, HiOutlineEye, HiOutlinePlus, HiOutlineTrash } from 'react-icons/hi2';
+import { useAuth, isSuperAdmin } from '@/lib/auth';
 
 const ALL_ROLES = ['CUSTOMER', 'TURF_OWNER', 'STAFF', 'MANAGER', 'ADMIN', 'SUPER_ADMIN'];
 
@@ -21,6 +22,8 @@ const emptyCreateForm = {
 };
 
 export default function UsersPage() {
+  const { user: me } = useAuth();
+  const superAdmin = isSuperAdmin(me?.roles ?? []);
   const [data, setData] = useState<PaginatedResponse<User> | null>(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -58,6 +61,44 @@ export default function UsersPage() {
       loadUsers();
     } catch {
       toast.error('Failed to update status');
+    }
+  }
+
+  const [deleteTarget, setDeleteTarget] = useState<User | null>(null);
+  const [resetTarget, setResetTarget] = useState<User | null>(null);
+  const [newPassword, setNewPassword] = useState('');
+  const [userBusy, setUserBusy] = useState(false);
+
+  async function confirmDeleteUser() {
+    if (!deleteTarget) return;
+    setUserBusy(true);
+    try {
+      await api.delete(`/admin/users/${deleteTarget.id}`);
+      toast.success('User deleted');
+      setDeleteTarget(null);
+      loadUsers();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      toast.error(msg || 'Delete failed');
+    } finally {
+      setUserBusy(false);
+    }
+  }
+
+  async function confirmResetPassword() {
+    if (!resetTarget) return;
+    if (newPassword.length < 8) { toast.error('Minimum 8 characters'); return; }
+    setUserBusy(true);
+    try {
+      await api.post(`/admin/users/${resetTarget.id}/reset-password`, { newPassword });
+      toast.success('Password reset — user must sign in again');
+      setResetTarget(null);
+      setNewPassword('');
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      toast.error(msg || 'Reset failed');
+    } finally {
+      setUserBusy(false);
     }
   }
 
@@ -225,6 +266,24 @@ export default function UsersPage() {
                         >
                           {user.isActive ? 'Deactivate' : 'Activate'}
                         </button>
+                        {superAdmin && (
+                          <>
+                            <button
+                              onClick={() => { setResetTarget(user); setNewPassword(''); }}
+                              title="Reset password (super admin)"
+                              className="rounded px-2 py-1 text-xs font-medium bg-blue-500/10 text-blue-400 hover:bg-blue-500/20"
+                            >
+                              Reset PW
+                            </button>
+                            <button
+                              onClick={() => setDeleteTarget(user)}
+                              title="Delete user (super admin)"
+                              className="rounded p-1 text-gray-500 hover:bg-red-500/10 hover:text-red-400"
+                            >
+                              <HiOutlineTrash className="h-4 w-4" />
+                            </button>
+                          </>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -354,6 +413,27 @@ export default function UsersPage() {
         <div className="mt-4 flex justify-end gap-2">
           <button onClick={() => { setShowCreate(false); setCreateForm(emptyCreateForm); }} className="btn-secondary">Cancel</button>
           <button onClick={submitCreate} disabled={creating} className="btn-primary">{creating ? 'Creating…' : 'Create User'}</button>
+        </div>
+      </Modal>
+
+      <Modal isOpen={!!deleteTarget} onClose={() => setDeleteTarget(null)} title={`Delete User: ${deleteTarget?.fullName || ''}`} size="sm">
+        <div className="space-y-4">
+          <p className="text-sm text-gray-400">Soft-deletes {deleteTarget?.email}. Blocked for owners and users with active bookings — deactivate those instead.</p>
+          <div className="flex justify-end gap-2">
+            <button onClick={() => setDeleteTarget(null)} className="btn-secondary">Cancel</button>
+            <button onClick={confirmDeleteUser} disabled={userBusy} className="btn-danger">{userBusy ? 'Deleting…' : 'Delete User'}</button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal isOpen={!!resetTarget} onClose={() => { setResetTarget(null); setNewPassword(''); }} title={`Reset Password: ${resetTarget?.fullName || ''}`} size="sm">
+        <div className="space-y-4">
+          <p className="text-sm text-gray-400">Sets a new password and signs the user out everywhere.</p>
+          <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="Min 8 characters" className="input-field" />
+          <div className="flex justify-end gap-2">
+            <button onClick={() => { setResetTarget(null); setNewPassword(''); }} className="btn-secondary">Cancel</button>
+            <button onClick={confirmResetPassword} disabled={userBusy} className="btn-primary">{userBusy ? 'Resetting…' : 'Reset Password'}</button>
+          </div>
         </div>
       </Modal>
     </div>

@@ -12,6 +12,12 @@ import {
   HiOutlineDocumentChartBar,
   HiOutlineTag,
   HiOutlineReceiptPercent,
+  HiOutlineBanknotes,
+  HiOutlineStar,
+  HiOutlineArrowUturnLeft,
+  HiOutlineMap,
+  HiOutlineUserCircle,
+  HiOutlineBell,
   HiOutlineArrowRightOnRectangle,
 } from 'react-icons/hi2';
 
@@ -23,7 +29,13 @@ const navItems = [
   { href: '/bookings', label: 'Bookings', icon: HiOutlineCalendarDays },
   { href: '/catalog', label: 'Catalog', icon: HiOutlineTag },
   { href: '/offers', label: 'Offers', icon: HiOutlineReceiptPercent },
+  { href: '/settlements', label: 'Settlements', icon: HiOutlineBanknotes },
+  { href: '/reviews', label: 'Reviews', icon: HiOutlineStar },
+  { href: '/refunds', label: 'Refunds', icon: HiOutlineArrowUturnLeft },
+  { href: '/locations', label: 'Locations', icon: HiOutlineMap },
   { href: '/reports', label: 'Reports', icon: HiOutlineDocumentChartBar },
+  { href: '/notifications', label: 'Notifications', icon: HiOutlineBell },
+  { href: '/profile', label: 'My Profile', icon: HiOutlineUserCircle },
 ];
 
 export default function Sidebar() {

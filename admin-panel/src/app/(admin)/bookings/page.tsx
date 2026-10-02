@@ -2,13 +2,12 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import api, { unwrap } from '@/lib/api';
-import { Booking, PaginatedResponse } from '@/lib/types';
+import { Booking, PaginatedResponse, User } from '@/lib/types';
 import Badge from '@/components/ui/Badge';
 import Modal from '@/components/ui/Modal';
 import LoadingSpinner from '@/components/ui/LoadingSpinner';
 import toast from 'react-hot-toast';
 import { HiOutlineMagnifyingGlass, HiOutlineEye, HiOutlinePlus } from 'react-icons/hi2';
-import { User } from '@/lib/types';
 
 interface SportRef { id: string; name: string }
 interface QuotePreview {
@@ -27,6 +26,78 @@ export default function BookingsPage() {
   const [page, setPage] = useState(1);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [detailBooking, setDetailBooking] = useState<any | null>(null);
+  const [cancelTarget, setCancelTarget] = useState<Booking | null>(null);
+  const [cancelReason, setCancelReason] = useState('');
+  const [actionBusy, setActionBusy] = useState(false);
+  // Autocomplete filter state (replaces raw UUID inputs)
+  const [turfQuery, setTurfQuery] = useState('');
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [turfOptions, setTurfOptions] = useState<any[]>([]);
+  const [turfLabel, setTurfLabel] = useState('');
+  const [userQuery, setUserQuery] = useState('');
+  const [userOptions, setUserOptions] = useState<User[]>([]);
+  const [userLabel, setUserLabel] = useState('');
+
+  const ACTIVE_BOOKING = ['CONFIRMED', 'PENDING', 'PAYMENT_PENDING'];
+
+  async function searchTurfs(q: string) {
+    setTurfQuery(q);
+    if (q.trim().length < 2) { setTurfOptions([]); return; }
+    try {
+      const { data: res } = await api.get('/admin/turfs', { params: { search: q.trim(), limit: 8 } });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      setTurfOptions(unwrap<{ items: any[] }>(res).items ?? []);
+    } catch {
+      setTurfOptions([]);
+    }
+  }
+
+  async function searchFilterUsers(q: string) {
+    setUserQuery(q);
+    if (q.trim().length < 2) { setUserOptions([]); return; }
+    try {
+      const { data: res } = await api.get('/admin/users', { params: { search: q.trim(), limit: 8 } });
+      setUserOptions(unwrap<PaginatedResponse<User>>(res).items ?? []);
+    } catch {
+      setUserOptions([]);
+    }
+  }
+
+  async function markStatus(id: string, status: 'NO_SHOW' | 'COMPLETED') {
+    setActionBusy(true);
+    try {
+      await api.patch(`/bookings/${id}`, { status });
+      toast.success(`Booking marked as ${status === 'NO_SHOW' ? 'No-Show' : 'Completed'}`);
+      setDetailBooking(null);
+      loadBookings();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      toast.error(msg || 'Status update failed');
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function confirmCancel() {
+    if (!cancelTarget) return;
+    setActionBusy(true);
+    try {
+      await api.post(
+        `/bookings/${cancelTarget.id}/cancel`,
+        cancelReason.trim() ? { reason: cancelReason.trim() } : {},
+      );
+      toast.success('Booking cancelled');
+      setCancelTarget(null);
+      setCancelReason('');
+      setDetailBooking(null);
+      loadBookings();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      toast.error(msg || 'Cancel failed');
+    } finally {
+      setActionBusy(false);
+    }
+  }
   // Create booking state
   const [showCreate, setShowCreate] = useState(false);
   const [userSearch, setUserSearch] = useState('');
@@ -238,20 +309,58 @@ export default function BookingsPage() {
           className="input-field w-40"
           placeholder="End Date"
         />
-        <input
-          type="text"
-          value={turfId}
-          onChange={(e) => { setTurfId(e.target.value); setPage(1); }}
-          className="input-field w-56"
-          placeholder="Turf ID (UUID)"
-        />
-        <input
-          type="text"
-          value={userId}
-          onChange={(e) => { setUserId(e.target.value); setPage(1); }}
-          className="input-field w-56"
-          placeholder="User ID (UUID)"
-        />
+        <div className="relative w-56">
+          <input
+            type="text"
+            value={turfId ? turfLabel : turfQuery}
+            onChange={(e) => { setTurfId(''); setTurfLabel(''); searchTurfs(e.target.value); }}
+            className="input-field pr-8"
+            placeholder="Filter by turf…"
+          />
+          {turfId && (
+            <button onClick={() => { setTurfId(''); setTurfLabel(''); setTurfQuery(''); setPage(1); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white" title="Clear">✕</button>
+          )}
+          {turfOptions.length > 0 && !turfId && (
+            <div className="absolute z-10 mt-1 max-h-48 w-full overflow-y-auto rounded-lg border border-gray-700 bg-gray-900 shadow-xl">
+              {turfOptions.map((t) => (
+                <button
+                  key={t.id}
+                  onClick={() => { setTurfId(t.id); setTurfLabel(t.name); setTurfOptions([]); setTurfQuery(''); setPage(1); }}
+                  className="block w-full px-3 py-2 text-left text-sm text-gray-200 hover:bg-gray-800"
+                >
+                  <span className="font-medium text-white">{t.name}</span>
+                  <span className="ml-2 text-xs text-gray-500">{t.city?.name || ''}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="relative w-56">
+          <input
+            type="text"
+            value={userId ? userLabel : userQuery}
+            onChange={(e) => { setUserId(''); setUserLabel(''); searchFilterUsers(e.target.value); }}
+            className="input-field pr-8"
+            placeholder="Filter by customer…"
+          />
+          {userId && (
+            <button onClick={() => { setUserId(''); setUserLabel(''); setUserQuery(''); setPage(1); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white" title="Clear">✕</button>
+          )}
+          {userOptions.length > 0 && !userId && (
+            <div className="absolute z-10 mt-1 max-h-48 w-full overflow-y-auto rounded-lg border border-gray-700 bg-gray-900 shadow-xl">
+              {userOptions.map((u) => (
+                <button
+                  key={u.id}
+                  onClick={() => { setUserId(u.id); setUserLabel(u.fullName); setUserOptions([]); setUserQuery(''); setPage(1); }}
+                  className="block w-full px-3 py-2 text-left text-sm text-gray-200 hover:bg-gray-800"
+                >
+                  <span className="font-medium text-white">{u.fullName}</span>
+                  <span className="ml-2 text-xs text-gray-500">{u.email}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {loading ? (
@@ -292,12 +401,42 @@ export default function BookingsPage() {
                     <td><Badge label={b.status} /></td>
                     <td><Badge label={b.paymentStatus || 'PENDING'} /></td>
                     <td>
-                      <button
-                        onClick={() => viewBookingDetail(b.id)}
-                        className="rounded p-1 text-gray-400 hover:bg-gray-800 hover:text-white"
-                      >
-                        <HiOutlineEye className="h-4 w-4" />
-                      </button>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => viewBookingDetail(b.id)}
+                          title="View details"
+                          className="rounded p-1 text-gray-400 hover:bg-gray-800 hover:text-white"
+                        >
+                          <HiOutlineEye className="h-4 w-4" />
+                        </button>
+                        {ACTIVE_BOOKING.includes(b.status) && (
+                          <>
+                            <button
+                              onClick={() => markStatus(b.id, 'COMPLETED')}
+                              disabled={actionBusy}
+                              title="Mark completed"
+                              className="rounded bg-emerald-500/10 px-2 py-1 text-xs font-medium text-emerald-400 hover:bg-emerald-500/20 disabled:opacity-50"
+                            >
+                              Complete
+                            </button>
+                            <button
+                              onClick={() => markStatus(b.id, 'NO_SHOW')}
+                              disabled={actionBusy}
+                              title="Mark no-show"
+                              className="rounded bg-amber-500/10 px-2 py-1 text-xs font-medium text-amber-400 hover:bg-amber-500/20 disabled:opacity-50"
+                            >
+                              No-Show
+                            </button>
+                            <button
+                              onClick={() => { setCancelTarget(b); setCancelReason(''); }}
+                              title="Cancel booking"
+                              className="rounded bg-rose-500/10 px-2 py-1 text-xs font-medium text-rose-400 hover:bg-rose-500/20"
+                            >
+                              Cancel
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -324,6 +463,31 @@ export default function BookingsPage() {
       <Modal isOpen={!!detailBooking} onClose={() => setDetailBooking(null)} title="Booking Details" size="xl">
         {detailBooking && (
           <div className="space-y-5 text-sm">
+            {ACTIVE_BOOKING.includes(detailBooking.status as string) && (
+              <div className="flex flex-wrap gap-2 rounded-lg border border-gray-800 bg-gray-800/30 p-3">
+                <span className="w-full text-xs font-medium uppercase tracking-wide text-gray-500">Admin actions</span>
+                <button
+                  onClick={() => markStatus(detailBooking.id as string, 'COMPLETED')}
+                  disabled={actionBusy}
+                  className="rounded bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-400 hover:bg-emerald-500/20 disabled:opacity-50"
+                >
+                  Mark Completed
+                </button>
+                <button
+                  onClick={() => markStatus(detailBooking.id as string, 'NO_SHOW')}
+                  disabled={actionBusy}
+                  className="rounded bg-amber-500/10 px-3 py-1.5 text-xs font-medium text-amber-400 hover:bg-amber-500/20 disabled:opacity-50"
+                >
+                  Mark No-Show
+                </button>
+                <button
+                  onClick={() => setCancelTarget({ id: detailBooking.id, bookingNumber: detailBooking.bookingNumber } as Booking)}
+                  className="rounded bg-rose-500/10 px-3 py-1.5 text-xs font-medium text-rose-400 hover:bg-rose-500/20"
+                >
+                  Cancel Booking
+                </button>
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
               <div><p className="text-gray-500">Booking #</p><p className="font-mono text-emerald-400">{detailBooking.bookingNumber as string}</p></div>
               <div><p className="text-gray-500">Status</p><Badge label={detailBooking.status as string} /></div>
@@ -540,6 +704,32 @@ export default function BookingsPage() {
             <button onClick={() => { setShowCreate(false); resetCreate(); }} className="btn-secondary">Cancel</button>
             <button onClick={previewQuote} disabled={quoting} className="btn-secondary text-xs">{quoting ? 'Checking…' : 'Preview Price'}</button>
             <button onClick={submitCreate} disabled={creating} className="btn-primary">{creating ? 'Creating…' : 'Create Booking'}</button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Cancel Booking Modal */}
+      <Modal
+        isOpen={!!cancelTarget}
+        onClose={() => { setCancelTarget(null); setCancelReason(''); }}
+        title={`Cancel Booking ${cancelTarget?.bookingNumber || ''}`}
+        size="sm"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-gray-400">
+            The slot is freed and any auto-refund is processed. This cannot be undone.
+          </p>
+          <textarea
+            value={cancelReason}
+            onChange={(e) => setCancelReason(e.target.value)}
+            placeholder="Cancellation reason (optional)…"
+            className="input-field h-24 resize-none"
+          />
+          <div className="flex justify-end gap-2">
+            <button onClick={() => { setCancelTarget(null); setCancelReason(''); }} className="btn-secondary">Keep Booking</button>
+            <button onClick={confirmCancel} disabled={actionBusy} className="btn-danger">
+              {actionBusy ? 'Cancelling…' : 'Cancel Booking'}
+            </button>
           </div>
         </div>
       </Modal>

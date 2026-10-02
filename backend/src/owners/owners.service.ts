@@ -9,11 +9,13 @@ import {
 import { BookingStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service';
 import { AnalyticsQueryDto } from './dto/analytics-query.dto';
+import { UpdateOwnerProfileDto } from './dto/update-owner-profile.dto';
 import { OwnerBookingQueryDto } from './dto/owner-booking-query.dto';
 import { CreateWalkInBookingDto } from './dto/create-walk-in-booking.dto';
 import { OwnerCancelBookingDto } from './dto/owner-cancel-booking.dto';
 import { OwnerRescheduleBookingDto } from './dto/owner-reschedule-booking.dto';
 import { generateBookingNumber } from '../common/utils/booking-number.util';
+import { resolveManagedScope } from './staff-scope';
 
 @Injectable()
 export class OwnersService {
@@ -29,49 +31,99 @@ export class OwnersService {
   }
 
   // ============================================================================
+  // OWN BUSINESS PROFILE (TURF_OWNER self-service)
+  // ============================================================================
+
+  async getMyProfile(userId: string) {
+    const owner = await this.prisma.turfOwner.findFirst({
+      where: { userId, deletedAt: null },
+      include: {
+        user: {
+          select: {
+            id: true,
+            email: true,
+            fullName: true,
+            phone: true,
+            isActive: true,
+            isEmailVerified: true,
+          },
+        },
+        commissionConfig: true,
+        _count: { select: { turfs: true } },
+      },
+    });
+    if (!owner) throw new NotFoundException('Owner profile not found');
+    return owner;
+  }
+
+  async updateMyProfile(userId: string, dto: UpdateOwnerProfileDto) {
+    const owner = await this.prisma.turfOwner.findFirst({
+      where: { userId, deletedAt: null },
+    });
+    if (!owner) throw new NotFoundException('Owner profile not found');
+
+    const data: Prisma.TurfOwnerUpdateInput = {};
+    const keys = [
+      'businessName',
+      'legalName',
+      'panNumber',
+      'gstNumber',
+      'bankAccountNumber',
+      'bankIfsc',
+      'bankName',
+    ] as const;
+    for (const key of keys) {
+      const value = dto[key];
+      if (value === undefined) continue;
+      if (key === 'businessName') {
+        if (!value.trim())
+          throw new BadRequestException('Business name cannot be empty');
+        data.businessName = value.trim();
+      } else {
+        (data as Record<string, unknown>)[key] = value.trim() || null;
+      }
+    }
+
+    if (Object.keys(data).length === 0) {
+      throw new BadRequestException('No profile fields provided to update');
+    }
+
+    const updated = await this.prisma.turfOwner.update({
+      where: { id: owner.id },
+      data,
+    });
+
+    this.logger.log(`Owner ${owner.id} updated own business profile`);
+    return updated;
+  }
+
+  // ============================================================================
   // AUTHORIZATION & RESOLUTION HELPERS
   // ============================================================================
 
   /**
-   * Resolve all turf IDs owned by the current user.
-   * Administrators and SuperAdmins have platform-wide access.
+   * Resolve all turf IDs the current user may operate.
+   * Administrators: everything. Owners: own turfs. Assigned
+   * managers/staff: their assignment scope. Everyone else: none.
    */
   async getOwnerTurfIds(
     userId: string,
     userRoles: string[] = [],
   ): Promise<string[]> {
-    const isAdmin =
-      userRoles.includes('ADMIN') || userRoles.includes('SUPER_ADMIN');
-
-    if (isAdmin) {
+    const scope = await resolveManagedScope(this.prisma, userId, userRoles);
+    if (scope.all) {
       const allTurfs = await this.prisma.turf.findMany({
         where: { deletedAt: null },
         select: { id: true },
       });
       return allTurfs.map((t) => t.id);
     }
-
-    const ownerProfile = await this.prisma.turfOwner.findUnique({
-      where: { userId },
-    });
-
-    if (!ownerProfile) {
-      return [];
-    }
-
-    const turfs = await this.prisma.turf.findMany({
-      where: {
-        ownerId: ownerProfile.id,
-        deletedAt: null,
-      },
-      select: { id: true },
-    });
-
-    return turfs.map((t) => t.id);
+    return scope.turfIds;
   }
 
   /**
-   * Asserts that a user has ownership permissions for a specific turf
+   * Asserts that a user may operate a specific turf (owner, assigned
+   * manager/staff, or platform admin).
    */
   async assertTurfOwnership(
     turfId: string,
@@ -93,14 +145,21 @@ export class OwnersService {
       throw new NotFoundException(`Turf venue with ID '${turfId}' not found`);
     }
 
-    if (turf.owner?.userId !== userId) {
-      this.logger.warn(
-        `Security alert: User ${userId} unauthorized for turf ${turfId}`,
-      );
-      throw new ForbiddenException(
-        'Access denied: You do not own this turf venue',
-      );
+    if (turf.owner?.userId === userId) {
+      return;
     }
+
+    const scope = await resolveManagedScope(this.prisma, userId, userRoles);
+    if (scope.turfIds.includes(turfId)) {
+      return;
+    }
+
+    this.logger.warn(
+      `Security alert: User ${userId} unauthorized for turf ${turfId}`,
+    );
+    throw new ForbiddenException(
+      'Access denied: You do not operate this turf venue',
+    );
   }
 
   // ============================================================================

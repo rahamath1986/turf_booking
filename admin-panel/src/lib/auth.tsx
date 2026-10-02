@@ -4,7 +4,7 @@ import { createContext, useContext, useEffect, useState, ReactNode } from 'react
 import { useRouter } from 'next/navigation';
 import api from './api';
 
-interface AdminUser {
+export interface PortalUser {
   id: string;
   email: string;
   fullName: string;
@@ -12,16 +12,45 @@ interface AdminUser {
 }
 
 interface AuthContextType {
-  user: AdminUser | null;
+  user: PortalUser | null;
   isLoading: boolean;
   login: (email: string, password: string) => Promise<void>;
   logout: () => void;
+  hasRole: (...roles: string[]) => boolean;
+  homeFor: (roles?: string[]) => string;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+const norm = (r: string) => r.toLowerCase();
+
+export function isAdminRole(roles: string[]) {
+  return roles.some((r) => ['super_admin', 'admin', 'superadmin'].includes(norm(r)));
+}
+
+export function isOwnerRole(roles: string[]) {
+  return roles.some((r) => ['turf_owner', 'manager', 'staff'].includes(norm(r)));
+}
+
+export function isSuperAdmin(roles: string[]) {
+  return roles.some((r) => norm(r) === 'super_admin');
+}
+
+export function isStaffOnly(roles: string[]) {
+  const n = roles.map(norm);
+  return n.includes('staff') && !isAdminRole(roles) && !n.includes('turf_owner') && !n.includes('manager');
+}
+
+/** Landing page per role priority: admin > owner/manager > staff > customer. */
+export function homeForRoles(roles: string[]): string {
+  if (isAdminRole(roles)) return '/dashboard';
+  if (isStaffOnly(roles)) return '/owner/scan';
+  if (isOwnerRole(roles)) return '/owner';
+  return '/play';
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<AdminUser | null>(null);
+  const [user, setUser] = useState<PortalUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const router = useRouter();
 
@@ -52,31 +81,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const refreshToken = tokenData.refreshToken || tokenData.refresh_token;
     const userData = tokenData.user;
 
-    // Verify the user has admin role
     const roles: string[] = userData?.roles || [];
-    const isAdmin = roles.some(
-      (r: string) =>
-        r.toLowerCase() === 'super_admin' ||
-        r.toLowerCase() === 'admin' ||
-        r.toLowerCase() === 'superadmin',
-    );
-
-    if (!isAdmin) {
-      throw new Error('Access denied. Admin privileges required.');
+    if (roles.length === 0) {
+      throw new Error('Login succeeded but no roles were assigned. Contact support.');
     }
 
     localStorage.setItem('admin_access_token', accessToken);
     if (refreshToken) localStorage.setItem('admin_refresh_token', refreshToken);
 
-    const adminUser: AdminUser = {
+    const portalUser: PortalUser = {
       id: userData.id,
       email: userData.email,
       fullName: userData.fullName || userData.full_name || '',
       roles,
     };
-    localStorage.setItem('admin_user', JSON.stringify(adminUser));
-    setUser(adminUser);
-    router.push('/dashboard');
+    localStorage.setItem('admin_user', JSON.stringify(portalUser));
+    setUser(portalUser);
+    router.push(homeForRoles(roles));
   }
 
   function logout() {
@@ -85,8 +106,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     router.push('/login');
   }
 
+  function hasRole(...roles: string[]) {
+    if (!user) return false;
+    const mine = user.roles.map(norm);
+    return roles.some((r) => mine.includes(norm(r)));
+  }
+
+  function homeFor(roles?: string[]) {
+    return homeForRoles(roles ?? user?.roles ?? []);
+  }
+
   return (
-    <AuthContext.Provider value={{ user, isLoading, login, logout }}>
+    <AuthContext.Provider value={{ user, isLoading, login, logout, hasRole, homeFor }}>
       {children}
     </AuthContext.Provider>
   );

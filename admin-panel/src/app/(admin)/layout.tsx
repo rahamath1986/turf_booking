@@ -2,19 +2,22 @@
 
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { useAuth } from '@/lib/auth';
+import { useAuth, isAdminRole } from '@/lib/auth';
 import Sidebar from '@/components/layout/Sidebar';
 import LoadingSpinner from '@/components/ui/LoadingSpinner';
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
-  const { user, isLoading } = useAuth();
+  const { user, isLoading, homeFor } = useAuth();
   const router = useRouter();
 
   useEffect(() => {
-    if (!isLoading && !user) {
+    if (isLoading) return;
+    if (!user) {
       router.push('/login');
+    } else if (!isAdminRole(user.roles)) {
+      router.push(homeFor());
     }
-  }, [user, isLoading, router]);
+  }, [user, isLoading, homeFor, router]);
 
   if (isLoading) {
     return (

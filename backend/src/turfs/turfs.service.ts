@@ -10,16 +10,21 @@ import { PrismaService } from '../database/prisma.service';
 import { Role } from '../common/enums/role.enum';
 import { TurfQueryDto } from './dto/turf-query.dto';
 import { TurfNearbyDto } from './dto/turf-nearby.dto';
-import { CreateTurfDto } from './dto/create-turf.dto';
+import { CreateTurfDto, TurfImageInputDto } from './dto/create-turf.dto';
 import { UpdateTurfDto } from './dto/update-turf.dto';
 import { UpdateTurfStatusDto } from './dto/update-turf-status.dto';
 import { PaginationQueryDto } from '../common/dto/pagination.dto';
+import { UploadsService } from '../uploads/uploads.service';
+import { resolveManagedScope } from '../owners/staff-scope';
 
 @Injectable()
 export class TurfsService {
   private readonly logger = new Logger(TurfsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly uploadsService: UploadsService,
+  ) {}
 
   // ---------------------------------------------------------------------------
   // HELPER: Haversine Great-Circle Distance (in Kilometers)
@@ -670,14 +675,17 @@ export class TurfsService {
     const isPlatformAdmin =
       userRoles.includes(Role.SUPER_ADMIN) || userRoles.includes(Role.ADMIN);
 
-    // Multi-tenant security check: verify owner
+    // Multi-tenant security check: verify owner, assignment, or admin
     if (turf.owner.userId !== userId && !isPlatformAdmin) {
-      this.logger.warn(
-        `[Security Alert] User ${userId} attempted unauthorized access to Turf ${turfId} owned by user ${turf.owner.userId}`,
-      );
-      throw new ForbiddenException(
-        'Access denied: You do not have permission to manage this turf venue',
-      );
+      const scope = await resolveManagedScope(this.prisma, userId, userRoles);
+      if (!scope.turfIds.includes(turfId)) {
+        this.logger.warn(
+          `[Security Alert] User ${userId} attempted unauthorized access to Turf ${turfId} owned by user ${turf.owner.userId}`,
+        );
+        throw new ForbiddenException(
+          'Access denied: You do not have permission to manage this turf venue',
+        );
+      }
     }
 
     return turf;
@@ -689,6 +697,17 @@ export class TurfsService {
     userRoles: string[],
     dto: CreateTurfDto,
   ) {
+    // Only venue owners (or platform admins) may create venues — managers and
+    // staff operate assigned turfs but must not spawn owner profiles.
+    if (
+      !userRoles.includes(Role.SUPER_ADMIN) &&
+      !userRoles.includes(Role.ADMIN) &&
+      !userRoles.includes(Role.TURF_OWNER)
+    ) {
+      throw new ForbiddenException(
+        'Only turf owners can create new venues',
+      );
+    }
     const owner = await this.getOrCreateOwnerProfile(userId);
     const slug = await this.generateUniqueSlug(dto.name);
 
@@ -1108,5 +1127,221 @@ export class TurfsService {
       turfId: updated.id,
       isActive: updated.isActive,
     };
+  }
+
+  // 18. POST /api/v1/owner/turfs/:id/images (Attach image URL)
+  async addOwnerTurfImage(
+    turfId: string,
+    userId: string,
+    userRoles: string[],
+    dto: TurfImageInputDto,
+  ) {
+    await this.assertTurfOwnership(turfId, userId, userRoles);
+
+    const image = await this.prisma.$transaction(async (tx) => {
+      const maxOrder = await tx.turfImage.aggregate({
+        where: { turfId },
+        _max: { displayOrder: true },
+      });
+
+      if (dto.isCover) {
+        await tx.turfImage.updateMany({
+          where: { turfId },
+          data: { isCover: false },
+        });
+        await tx.turf.update({
+          where: { id: turfId },
+          data: { coverImageUrl: dto.imageUrl },
+        });
+      }
+
+      return tx.turfImage.create({
+        data: {
+          turfId,
+          imageUrl: dto.imageUrl,
+          caption: dto.caption || null,
+          displayOrder: dto.displayOrder ?? (maxOrder._max.displayOrder ?? -1) + 1,
+          isCover: dto.isCover ?? false,
+        },
+      });
+    });
+
+    this.logger.log(`[Turf Image] User ${userId} added image ${image.id} to turf ${turfId}`);
+    return image;
+  }
+
+  // 19. POST /api/v1/owner/turfs/:id/images/upload (Upload image file)
+  async uploadOwnerTurfImage(
+    turfId: string,
+    userId: string,
+    userRoles: string[],
+    file: { buffer: Buffer; mimetype: string; originalname: string; size: number },
+    caption?: string,
+  ) {
+    await this.assertTurfOwnership(turfId, userId, userRoles);
+
+    const existingCount = await this.prisma.turfImage.count({
+      where: { turfId },
+    });
+
+    const imageUrl = await this.uploadsService.uploadTurfImage(
+      file.buffer,
+      file.mimetype,
+      file.originalname,
+      file.size,
+    );
+
+    return this.addOwnerTurfImage(
+      turfId,
+      userId,
+      userRoles,
+      { imageUrl, caption, isCover: existingCount === 0 },
+    );
+  }
+
+  // 18b. POST /api/v1/owner/turfs/:id/videos (Attach video URL)
+  async addOwnerTurfVideo(
+    turfId: string,
+    userId: string,
+    userRoles: string[],
+    dto: { videoUrl: string; thumbnailUrl?: string; title?: string },
+  ) {
+    await this.assertTurfOwnership(turfId, userId, userRoles);
+    if (!dto?.videoUrl || typeof dto.videoUrl !== 'string')
+      throw new BadRequestException('videoUrl is required');
+
+    const maxOrder = await this.prisma.turfVideo.aggregate({
+      where: { turfId },
+      _max: { displayOrder: true },
+    });
+
+    const video = await this.prisma.turfVideo.create({
+      data: {
+        turfId,
+        videoUrl: dto.videoUrl,
+        thumbnailUrl: dto.thumbnailUrl || null,
+        title: dto.title?.trim() || null,
+        displayOrder: (maxOrder._max.displayOrder ?? -1) + 1,
+      },
+    });
+
+    this.logger.log(`[Turf Video] User ${userId} added video ${video.id} to turf ${turfId}`);
+    return video;
+  }
+
+  // 18c. DELETE /api/v1/owner/turfs/:id/videos/:videoId (Remove video)
+  async deleteOwnerTurfVideo(
+    turfId: string,
+    userId: string,
+    userRoles: string[],
+    videoId: string,
+  ) {
+    await this.assertTurfOwnership(turfId, userId, userRoles);
+
+    const video = await this.prisma.turfVideo.findFirst({
+      where: { id: videoId, turfId },
+    });
+    if (!video) throw new NotFoundException('Turf video not found');
+
+    await this.prisma.turfVideo.delete({ where: { id: videoId } });
+
+    this.logger.log(`[Turf Video] User ${userId} deleted video ${videoId} from turf ${turfId}`);
+    return { success: true, message: 'Turf video deleted successfully' };
+  }
+
+  // 19b. POST /api/v1/owner/turfs/:id/videos/upload (Upload video file)
+  async uploadOwnerTurfVideo(
+    turfId: string,
+    userId: string,
+    userRoles: string[],
+    file: { buffer: Buffer; mimetype: string; originalname: string; size: number },
+    title?: string,
+  ) {
+    await this.assertTurfOwnership(turfId, userId, userRoles);
+
+    const videoUrl = await this.uploadsService.uploadTurfVideo(
+      file.buffer,
+      file.mimetype,
+      file.originalname,
+      file.size,
+    );
+
+    const maxOrder = await this.prisma.turfVideo.aggregate({
+      where: { turfId },
+      _max: { displayOrder: true },
+    });
+
+    const video = await this.prisma.turfVideo.create({
+      data: {
+        turfId,
+        videoUrl,
+        thumbnailUrl: null,
+        title: title?.trim() || null,
+        displayOrder: (maxOrder._max.displayOrder ?? -1) + 1,
+      },
+    });
+
+    this.logger.log(`[Turf Video] User ${userId} uploaded video ${video.id} to turf ${turfId}`);
+    return video;
+  }
+
+  // 20. POST /api/v1/owner/turfs/:id/images/:imageId/cover (Promote cover)
+  async setOwnerTurfCover(
+    turfId: string,
+    userId: string,
+    userRoles: string[],
+    imageId: string,
+  ) {
+    await this.assertTurfOwnership(turfId, userId, userRoles);
+
+    const image = await this.prisma.turfImage.findFirst({
+      where: { id: imageId, turfId },
+    });
+    if (!image) throw new NotFoundException('Turf image not found');
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.turfImage.updateMany({
+        where: { turfId },
+        data: { isCover: false },
+      });
+      await tx.turfImage.update({
+        where: { id: imageId },
+        data: { isCover: true },
+      });
+      await tx.turf.update({
+        where: { id: turfId },
+        data: { coverImageUrl: image.imageUrl },
+      });
+    });
+
+    return { success: true, message: 'Cover image updated successfully' };
+  }
+
+  // 21. DELETE /api/v1/owner/turfs/:id/images/:imageId (Remove image)
+  async deleteOwnerTurfImage(
+    turfId: string,
+    userId: string,
+    userRoles: string[],
+    imageId: string,
+  ) {
+    await this.assertTurfOwnership(turfId, userId, userRoles);
+
+    const image = await this.prisma.turfImage.findFirst({
+      where: { id: imageId, turfId },
+    });
+    if (!image) throw new NotFoundException('Turf image not found');
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.turfImage.delete({ where: { id: imageId } });
+      if (image.isCover) {
+        await tx.turf.update({
+          where: { id: turfId },
+          data: { coverImageUrl: null },
+        });
+      }
+    });
+
+    this.logger.log(`[Turf Image] User ${userId} deleted image ${imageId} from turf ${turfId}`);
+    return { success: true, message: 'Turf image deleted successfully' };
   }
 }

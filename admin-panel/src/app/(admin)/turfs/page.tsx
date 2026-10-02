@@ -8,6 +8,7 @@ import Modal from '@/components/ui/Modal';
 import LoadingSpinner from '@/components/ui/LoadingSpinner';
 import toast from 'react-hot-toast';
 import { HiOutlineMagnifyingGlass, HiOutlineEye, HiOutlinePlus, HiOutlinePencil, HiOutlineTrash } from 'react-icons/hi2';
+import { VideoAdder, TurfSchedules } from '@/components/turfs/TurfExtras';
 
 interface RefItem { id: string; name: string }
 interface OwnerRef { id: string; businessName: string; user?: { fullName: string; email: string } }
@@ -738,6 +739,68 @@ export default function TurfsPage() {
               <div><p className="text-gray-500">Active</p><Badge label={detailTurf.isActive ? 'active' : 'inactive'} /></div>
               <div><p className="text-gray-500">Featured</p><Badge label={detailTurf.isFeatured ? 'true' : 'false'} /></div>
             </div>
+
+            {detailTurf.rejectionReason && (
+              <div className="rounded-lg border border-rose-500/20 bg-rose-500/5 p-4">
+                <p className="font-medium text-rose-400">Rejection Reason</p>
+                <p className="mt-1 text-sm text-gray-300">{detailTurf.rejectionReason}</p>
+              </div>
+            )}
+
+            {/* Videos */}
+            <div>
+              <div className="mb-2 flex items-center justify-between">
+                <p className="font-medium text-gray-400">Videos ({(detailTurf.videos ?? []).length})</p>
+              </div>
+              {(detailTurf.videos ?? []).length > 0 && (
+                <div className="mb-2 space-y-2">
+                  {(detailTurf.videos ?? []).map((v) => (
+                    <div key={v.id} className="flex items-center justify-between gap-3 rounded-lg bg-gray-800/50 px-3 py-2">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm text-white">{v.title || 'Untitled video'}</p>
+                        <a href={v.videoUrl} target="_blank" rel="noreferrer" className="block truncate font-mono text-xs text-blue-400 hover:underline">{v.videoUrl}</a>
+                      </div>
+                      <button
+                        onClick={async () => {
+                          try {
+                            await api.delete(`/admin/turfs/${detailTurf.id}/videos/${v.id}`);
+                            toast.success('Video deleted');
+                            const { data } = await api.get(`/admin/turfs/${detailTurf.id}`);
+                            setDetailTurf(unwrap<Turf>(data));
+                            loadTurfs();
+                          } catch {
+                            toast.error('Failed to delete video');
+                          }
+                        }}
+                        className="shrink-0 rounded p-1 text-gray-500 hover:bg-red-500/10 hover:text-red-400"
+                        title="Delete video"
+                      >
+                        <HiOutlineTrash className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <VideoAdder
+                onAdd={async (payload) => {
+                  await api.post(`/admin/turfs/${detailTurf.id}/videos`, payload);
+                  const { data } = await api.get(`/admin/turfs/${detailTurf.id}`);
+                  setDetailTurf(unwrap<Turf>(data));
+                }}
+                onUpload={async (file) => {
+                  const fd = new FormData();
+                  fd.append('file', file);
+                  await api.post(`/admin/turfs/${detailTurf.id}/videos/upload`, fd, {
+                    headers: { 'Content-Type': 'multipart/form-data' },
+                  });
+                  const { data } = await api.get(`/admin/turfs/${detailTurf.id}`);
+                  setDetailTurf(unwrap<Turf>(data));
+                }}
+              />
+            </div>
+
+            {/* Schedules: hours, blocks, pricing */}
+            {detailTurf && <TurfSchedules turfId={detailTurf.id} />}
           </div>
         )}
       </Modal>

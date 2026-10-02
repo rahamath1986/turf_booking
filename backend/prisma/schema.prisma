@@ -53,6 +53,7 @@ model User {
   checkInAudits          BookingCheckInAudit[]
   commissionsSet         OwnerCommissionConfig[] @relation("CommissionSetBy")
   settlementsProcessed   Settlement[]            @relation("SettlementProcessedBy")
+  staffAssignment        StaffAssignment?
 
   @@index([email, isActive])
   @@index([phone])
@@ -328,12 +329,14 @@ model TurfOwner {
   bankName          String?   @map("bank_name") @db.VarChar(100)
   isVerified        Boolean   @default(false) @map("is_verified")
   isActive          Boolean   @default(false) @map("is_active")
+  rejectionReason   String?   @map("rejection_reason") @db.Text
   createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt         DateTime? @map("deleted_at") @db.Timestamptz(6)
 
   user  User   @relation(fields: [userId], references: [id], onDelete: Restrict)
   turfs Turf[]
+  staffAssignments StaffAssignment[]
   commissionConfig       OwnerCommissionConfig?
   commissionTransactions CommissionTransaction[]
   settlements            Settlement[]
@@ -365,6 +368,7 @@ model Turf {
   totalReviews       Int       @default(0) @map("total_reviews")
   isActive           Boolean   @default(true) @map("is_active")
   isApproved         Boolean   @default(false) @map("is_approved")
+  rejectionReason    String?   @map("rejection_reason") @db.Text
   isFeatured         Boolean   @default(false) @map("is_featured")
   openTime           String    @default("06:00") @map("open_time") @db.VarChar(5)
   closeTime          String    @default("22:00") @map("close_time") @db.VarChar(5)
@@ -391,6 +395,7 @@ model Turf {
   cancellationPolicyRule CancellationPolicy?
   favorites              Favorite[]
   reviews                Review[]
+  staffAssignments       StaffAssignment[]
 
   @@index([ownerId])
   @@index([cityId, isActive, isApproved])
@@ -1002,6 +1007,29 @@ model CommissionTransaction {
   @@index([settlementId])
   @@index([bookingId])
   @@map("commission_transactions")
+}
+
+// ------------------------------------------------------------------------------
+// STAFF & MANAGER SCOPING
+// Links a manager/staff login to the turf owner (and optionally one venue)
+// they operate. Resolved by staff-scope checks across owner services.
+// ------------------------------------------------------------------------------
+
+model StaffAssignment {
+  id          String   @id @default(uuid()) @db.Uuid
+  userId      String   @unique @map("user_id") @db.Uuid
+  turfOwnerId String   @map("turf_owner_id") @db.Uuid
+  turfId      String?  @map("turf_id") @db.Uuid
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  owner TurfOwner @relation(fields: [turfOwnerId], references: [id], onDelete: Restrict)
+  turf  Turf?     @relation(fields: [turfId], references: [id], onDelete: SetNull)
+
+  @@index([turfOwnerId, isActive])
+  @@map("staff_assignments")
 }
 
 model Settlement {

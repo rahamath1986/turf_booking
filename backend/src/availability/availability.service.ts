@@ -11,6 +11,7 @@ import { AvailabilityQueryDto } from './dto/availability-query.dto';
 import { AvailableSlotsQueryDto } from './dto/available-slots-query.dto';
 import { SetAvailabilityDto } from './dto/set-operating-hours.dto';
 import { BlockSlotDto } from './dto/block-slot.dto';
+import { resolveManagedScope } from '../owners/staff-scope';
 
 export interface CalculatedSlot {
   slotId: string;
@@ -121,9 +122,12 @@ export class AvailabilityService {
       userRoles.includes(Role.SUPER_ADMIN) || userRoles.includes(Role.ADMIN);
 
     if (!isPlatformAdmin && turf.owner.userId !== userId) {
-      throw new ForbiddenException(
-        'You are not authorized to manage this turf',
-      );
+      const scope = await resolveManagedScope(this.prisma, userId, userRoles);
+      if (!scope.turfIds.includes(turfId)) {
+        throw new ForbiddenException(
+          'You are not authorized to manage this turf',
+        );
+      }
     }
 
     return turf;

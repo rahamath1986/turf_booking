@@ -368,6 +368,9 @@ export class CouponsService {
     if (query.isActive !== undefined) {
       where.isActive = query.isActive;
     }
+    if (query.search?.trim()) {
+      where.code = { contains: query.search.trim().toUpperCase(), mode: 'insensitive' };
+    }
 
     const [total, items] = await Promise.all([
       this.prisma.coupon.count({ where }),

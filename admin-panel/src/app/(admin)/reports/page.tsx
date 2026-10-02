@@ -116,11 +116,63 @@ export default function ReportsPage() {
     { key: 'refunds', label: 'Refunds', icon: HiOutlineArrowUturnLeft },
   ];
 
+  function downloadCsv(filename: string, rows: Record<string, unknown>[]) {
+    if (rows.length === 0) { toast.error('Nothing to export'); return; }
+    const headers = Object.keys(rows[0]);
+    const esc = (v: unknown) => {
+      const s = v == null ? '' : String(v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const csv = [headers.join(','), ...rows.map((r) => headers.map((h) => esc(r[h])).join(','))].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success(`Exported ${rows.length} row(s)`);
+  }
+
+  function exportActiveTab() {
+    const stamp = new Date().toISOString().split('T')[0];
+    switch (activeTab) {
+      case 'revenue':
+        if (revenue) downloadCsv(`revenue-${stamp}.csv`, revenue.trend);
+        break;
+      case 'bookings':
+        if (bookings) downloadCsv(`bookings-${stamp}.csv`, bookings.trend);
+        break;
+      case 'users':
+        if (users) downloadCsv(`users-by-role-${stamp}.csv`, users.byRole);
+        break;
+      case 'turfs':
+        if (turfs) downloadCsv(`turfs-by-city-${stamp}.csv`, turfs.byCity);
+        break;
+      case 'commission':
+        if (commission) {
+          downloadCsv(`commission-${stamp}.csv`, [
+            { segment: 'settled', ...commission.settled },
+            { segment: 'unsettled', ...commission.unsettled },
+          ]);
+        }
+        break;
+      case 'refunds':
+        if (refunds) downloadCsv(`refunds-by-status-${stamp}.csv`, refunds.byStatus);
+        break;
+    }
+  }
+
   return (
     <div>
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-white">Reports & Analytics</h1>
-        <p className="mt-1 text-sm text-gray-500">Platform insights and performance metrics</p>
+      <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-white">Reports & Analytics</h1>
+          <p className="mt-1 text-sm text-gray-500">Platform insights and performance metrics</p>
+        </div>
+        <button onClick={exportActiveTab} className="btn-secondary w-fit text-xs">
+          Export {activeTab} CSV
+        </button>
       </div>
 
       {/* Tabs */}

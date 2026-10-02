@@ -6,7 +6,7 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
-import { Prisma, BookingStatus } from '@prisma/client';
+import { Prisma, BookingStatus, RefundStatus } from '@prisma/client';
 import * as argon2 from 'argon2';
 import { Role } from '../common/enums/role.enum';
 import {
@@ -26,8 +26,21 @@ import {
   AdminUpdateFacilityDto,
   AdminUpdateSportDto,
 } from './dto/admin-catalog.dto';
+import {
+  AdminCreateAreaDto,
+  AdminCreateCityDto,
+  AdminCreateCountryDto,
+  AdminCreateStateDto,
+  AdminUpdateAreaDto,
+  AdminUpdateCityDto,
+  AdminUpdateCountryDto,
+  AdminUpdateStateDto,
+} from './dto/admin-location.dto';
+import { SetAvailabilityDto } from '../availability/dto/set-operating-hours.dto';
+import { BlockSlotDto } from '../availability/dto/block-slot.dto';
 import { AvailabilityService } from '../availability/availability.service';
 import { UploadsService } from '../uploads/uploads.service';
+import { ReviewsService } from '../reviews/reviews.service';
 import { generateBookingNumber } from '../common/utils/booking-number.util';
 
 // ============================================================================
@@ -78,6 +91,7 @@ export class AdminService {
     private readonly prisma: PrismaService,
     private readonly availabilityService: AvailabilityService,
     private readonly uploadsService: UploadsService,
+    private readonly reviewsService: ReviewsService,
   ) {}
 
   // ============================================================================
@@ -95,6 +109,11 @@ export class AdminService {
       totalRevenue,
       pendingOwners,
       pendingTurfs,
+      ownersCount,
+      refundsAgg,
+      pendingRefunds,
+      pendingSettlements,
+      activeCoupons,
     ] = await Promise.all([
       this.prisma.user.count({ where: { deletedAt: null } }),
       this.prisma.turf.count({ where: { deletedAt: null } }),
@@ -119,6 +138,18 @@ export class AdminService {
       this.prisma.turf.count({
         where: { isApproved: false, isActive: true, deletedAt: null },
       }),
+      this.prisma.turfOwner.count({ where: { deletedAt: null } }),
+      this.prisma.refund.aggregate({
+        _sum: { amount: true },
+        _count: true,
+      }),
+      this.prisma.refund.count({ where: { status: RefundStatus.PENDING } }),
+      this.prisma.settlement.count({
+        where: { status: { in: ['PENDING', 'PROCESSING', 'ON_HOLD'] } },
+      }),
+      this.prisma.coupon.count({
+        where: { isActive: true, endDate: { gt: new Date() } },
+      }),
     ]);
 
     return {
@@ -129,6 +160,14 @@ export class AdminService {
       bookings: { total: bookingsCount, active: activeBookings },
       totalRevenue: Number(totalRevenue._sum.totalPrice ?? 0),
       pendingApprovals: { owners: pendingOwners, turfs: pendingTurfs },
+      owners: ownersCount,
+      refunds: {
+        total: refundsAgg._count,
+        totalAmount: Number(refundsAgg._sum.amount ?? 0),
+        pending: pendingRefunds,
+      },
+      pendingSettlements,
+      activeCoupons,
       database: 'turf_booking_db',
     };
   }
@@ -297,6 +336,61 @@ export class AdminService {
     };
   }
 
+  async deleteUser(userId: string, adminId: string) {
+    if (userId === adminId)
+      throw new BadRequestException('You cannot delete your own account');
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId, deletedAt: null },
+      include: { turfOwner: { select: { id: true } } },
+    });
+    if (!user) throw new NotFoundException('User not found');
+    if (user.turfOwner)
+      throw new ConflictException(
+        'User has an owner profile — suspend or delete the owner first',
+      );
+    const futureBookings = await this.prisma.booking.count({
+      where: {
+        userId,
+        deletedAt: null,
+        status: { in: [BookingStatus.CONFIRMED] },
+      },
+    });
+    if (futureBookings > 0)
+      throw new ConflictException(
+        `User has ${futureBookings} active booking(s) — deactivate instead`,
+      );
+
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { isActive: false, deletedAt: new Date() },
+    });
+    this.logger.log(`Admin ${adminId} soft-deleted user ${userId}`);
+    return { message: 'User deleted successfully' };
+  }
+
+  async resetUserPassword(
+    userId: string,
+    newPassword: string,
+    adminId: string,
+  ) {
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId, deletedAt: null },
+    });
+    if (!user) throw new NotFoundException('User not found');
+    if (newPassword.length < 8)
+      throw new BadRequestException('Password must be at least 8 characters long');
+
+    const passwordHash = await argon2.hash(newPassword);
+    await this.prisma.user.update({ where: { id: userId }, data: { passwordHash } });
+    // Invalidate all sessions so only the new password works.
+    await this.prisma.refreshToken.updateMany({
+      where: { userId },
+      data: { isRevoked: true },
+    });
+    this.logger.log(`Admin ${adminId} reset password for user ${userId}`);
+    return { message: 'Password reset successfully. User must sign in again.' };
+  }
+
   async updateUserStatus(userId: string, isActive: boolean, adminId: string) {
     const user = await this.prisma.user.findFirst({
       where: { id: userId, deletedAt: null },
@@ -387,7 +481,7 @@ export class AdminService {
 
     await this.prisma.turfOwner.update({
       where: { id: ownerId },
-      data: { isVerified: true, isActive: true },
+      data: { isVerified: true, isActive: true, rejectionReason: null },
     });
 
     this.logger.log(`Admin ${adminId} approved owner ${ownerId}`);
@@ -402,7 +496,7 @@ export class AdminService {
 
     await this.prisma.turfOwner.update({
       where: { id: ownerId },
-      data: { isVerified: false, isActive: false },
+      data: { isVerified: false, isActive: false, rejectionReason: reason || null },
     });
 
     this.logger.log(`Admin ${adminId} rejected owner ${ownerId}: ${reason}`);
@@ -645,7 +739,8 @@ export class AdminService {
         area: true,
         turfSports: { include: { sport: true } },
         turfFacilities: { include: { facility: true } },
-        images: true,
+        images: { orderBy: { displayOrder: 'asc' } },
+        videos: { orderBy: { displayOrder: 'asc' } },
         _count: { select: { bookings: true, reviews: true } },
       },
     });
@@ -663,7 +758,7 @@ export class AdminService {
 
     await this.prisma.turf.update({
       where: { id: turfId },
-      data: { isApproved: true, isActive: true },
+      data: { isApproved: true, isActive: true, rejectionReason: null },
     });
 
     this.logger.log(`Admin ${adminId} approved turf ${turfId}`);
@@ -678,7 +773,7 @@ export class AdminService {
 
     await this.prisma.turf.update({
       where: { id: turfId },
-      data: { isApproved: false, isActive: false },
+      data: { isApproved: false, isActive: false, rejectionReason: reason || null },
     });
 
     this.logger.log(`Admin ${adminId} rejected turf ${turfId}: ${reason}`);
@@ -1833,6 +1928,755 @@ export class AdminService {
 
     this.logger.log(`Admin ${adminId} deleted facility ${facilityId}`);
     return { message: 'Facility deleted successfully' };
+  }
+
+  // ============================================================================
+  // REVIEW MODERATION
+  // ============================================================================
+
+  async listReviews(query: {
+    search?: string;
+    turfId?: string;
+    rating?: number;
+    page?: number;
+    limit?: number;
+  }) {
+    const page = Math.max(1, query.page ?? 1);
+    const limit = Math.min(100, Math.max(1, query.limit ?? 20));
+    const skip = (page - 1) * limit;
+
+    const where: Prisma.ReviewWhereInput = {};
+    if (query.turfId) where.turfId = query.turfId;
+    if (query.rating !== undefined) where.rating = query.rating;
+    if (query.search?.trim()) {
+      const q = query.search.trim();
+      where.OR = [
+        { comment: { contains: q, mode: 'insensitive' } },
+        { user: { fullName: { contains: q, mode: 'insensitive' } } },
+        { user: { email: { contains: q, mode: 'insensitive' } } },
+        { turf: { name: { contains: q, mode: 'insensitive' } } },
+      ];
+    }
+
+    const [items, total] = await Promise.all([
+      this.prisma.review.findMany({
+        where,
+        include: {
+          user: { select: { id: true, fullName: true, email: true } },
+          turf: { select: { id: true, name: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+      this.prisma.review.count({ where }),
+    ]);
+
+    return {
+      items,
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+    };
+  }
+
+  async deleteReview(reviewId: string, adminId: string) {
+    return this.reviewsService.deleteReview(reviewId, adminId, [
+      Role.SUPER_ADMIN,
+    ]);
+  }
+
+  // ============================================================================
+  // REFUND MANAGEMENT
+  // ============================================================================
+
+  async listRefunds(query: {
+    search?: string;
+    status?: RefundStatus;
+    page?: number;
+    limit?: number;
+  }) {
+    const page = Math.max(1, query.page ?? 1);
+    const limit = Math.min(100, Math.max(1, query.limit ?? 20));
+    const skip = (page - 1) * limit;
+
+    const where: Prisma.RefundWhereInput = {};
+    if (query.status) where.status = query.status;
+    if (query.search?.trim()) {
+      const q = query.search.trim();
+      where.OR = [
+        { refundNumber: { contains: q, mode: 'insensitive' } },
+        { booking: { bookingNumber: { contains: q, mode: 'insensitive' } } },
+        { user: { email: { contains: q, mode: 'insensitive' } } },
+        { user: { fullName: { contains: q, mode: 'insensitive' } } },
+      ];
+    }
+
+    const [items, total] = await Promise.all([
+      this.prisma.refund.findMany({
+        where,
+        include: {
+          booking: {
+            select: {
+              id: true,
+              bookingNumber: true,
+              turf: { select: { id: true, name: true } },
+            },
+          },
+          user: {
+            select: { id: true, fullName: true, email: true, phone: true },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+      this.prisma.refund.count({ where }),
+    ]);
+
+    return {
+      items: items.map((r) => ({
+        ...r,
+        amount: Number(r.amount),
+        cancellationFee: Number(r.cancellationFee),
+        refundPercentage:
+          r.refundPercentage != null ? Number(r.refundPercentage) : null,
+      })),
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+    };
+  }
+
+  async processRefund(
+    refundId: string,
+    dto: { status: RefundStatus; failureReason?: string; gatewayRefundId?: string },
+    adminId: string,
+  ) {
+    const refund = await this.prisma.refund.findUnique({
+      where: { id: refundId },
+    });
+    if (!refund) throw new NotFoundException('Refund not found');
+    if (refund.status !== RefundStatus.PENDING)
+      throw new BadRequestException(
+        `Refund is already ${refund.status.toLowerCase()}`,
+      );
+
+    if (dto.status === RefundStatus.FAILED && !dto.failureReason?.trim()) {
+      throw new BadRequestException(
+        'A failure reason is required to mark a refund as failed',
+      );
+    }
+
+    const updated = await this.prisma.refund.update({
+      where: { id: refundId },
+      data: {
+        status: dto.status,
+        failureReason:
+          dto.status === RefundStatus.FAILED ? dto.failureReason!.trim() : null,
+        gatewayRefundId: dto.gatewayRefundId?.trim() || refund.gatewayRefundId,
+        processedAt: new Date(),
+      },
+    });
+
+    this.logger.log(
+      `Admin ${adminId} marked refund ${refundId} as ${dto.status}`,
+    );
+    return { ...updated, amount: Number(updated.amount) };
+  }
+
+  // ============================================================================
+  // LOCATION MANAGEMENT (country > state > city > area)
+  // ============================================================================
+
+  async listCountries() {
+    const items = await this.prisma.country.findMany({
+      include: { _count: { select: { states: true } } },
+      orderBy: { name: 'asc' },
+    });
+    return { items };
+  }
+
+  async createCountry(dto: AdminCreateCountryDto, adminId: string) {
+    const name = dto.name.trim();
+    const code = dto.code.trim().toUpperCase();
+    const clash = await this.prisma.country.findFirst({
+      where: { OR: [{ name: { equals: name, mode: 'insensitive' } }, { code }] },
+    });
+    if (clash) throw new ConflictException('Country name or code already exists');
+
+    const country = await this.prisma.country.create({
+      data: {
+        name,
+        code,
+        phoneCode: dto.phoneCode.trim(),
+        currency: dto.currency?.trim() || 'INR',
+        isActive: dto.isActive ?? true,
+      },
+    });
+    this.logger.log(`Admin ${adminId} created country ${country.id}`);
+    return country;
+  }
+
+  async updateCountry(countryId: string, dto: AdminUpdateCountryDto, adminId: string) {
+    const country = await this.prisma.country.findUnique({ where: { id: countryId } });
+    if (!country) throw new NotFoundException('Country not found');
+
+    const data: Prisma.CountryUpdateInput = {};
+    if (dto.name !== undefined) {
+      const name = dto.name.trim();
+      if (!name) throw new BadRequestException('Country name cannot be empty');
+      const clash = await this.prisma.country.findFirst({
+        where: { name: { equals: name, mode: 'insensitive' }, id: { not: countryId } },
+      });
+      if (clash) throw new ConflictException('Country name already exists');
+      data.name = name;
+    }
+    if (dto.code !== undefined) {
+      const code = dto.code.trim().toUpperCase();
+      const clash = await this.prisma.country.findFirst({
+        where: { code, id: { not: countryId } },
+      });
+      if (clash) throw new ConflictException('Country code already exists');
+      data.code = code;
+    }
+    if (dto.phoneCode !== undefined) data.phoneCode = dto.phoneCode.trim();
+    if (dto.currency !== undefined) data.currency = dto.currency.trim() || 'INR';
+    if (dto.isActive !== undefined) data.isActive = dto.isActive;
+
+    const updated = await this.prisma.country.update({ where: { id: countryId }, data });
+    this.logger.log(`Admin ${adminId} updated country ${countryId}`);
+    return updated;
+  }
+
+  async deleteCountry(countryId: string, adminId: string) {
+    const used = await this.prisma.state.count({ where: { countryId } });
+    if (used > 0)
+      throw new ConflictException(`Country has ${used} state(s) — deactivate instead`);
+    const existing = await this.prisma.country.findUnique({ where: { id: countryId } });
+    if (!existing) throw new NotFoundException('Country not found');
+    await this.prisma.country.delete({ where: { id: countryId } });
+    this.logger.log(`Admin ${adminId} deleted country ${countryId}`);
+    return { message: 'Country deleted successfully' };
+  }
+
+  async listStates(countryId?: string) {
+    const items = await this.prisma.state.findMany({
+      where: countryId ? { countryId } : {},
+      include: {
+        country: { select: { id: true, name: true } },
+        _count: { select: { cities: true } },
+      },
+      orderBy: { name: 'asc' },
+    });
+    return { items };
+  }
+
+  async createState(dto: AdminCreateStateDto, adminId: string) {
+    const country = await this.prisma.country.findUnique({ where: { id: dto.countryId } });
+    if (!country) throw new NotFoundException('Country not found');
+
+    const name = dto.name.trim();
+    const code = dto.code.trim().toUpperCase();
+    const clash = await this.prisma.state.findFirst({
+      where: {
+        OR: [
+          { countryId: dto.countryId, code },
+          { countryId: dto.countryId, name: { equals: name, mode: 'insensitive' } },
+        ],
+      },
+    });
+    if (clash) throw new ConflictException('State name or code already exists in this country');
+
+    const state = await this.prisma.state.create({
+      data: { countryId: dto.countryId, name, code, isActive: dto.isActive ?? true },
+    });
+    this.logger.log(`Admin ${adminId} created state ${state.id}`);
+    return state;
+  }
+
+  async updateState(stateId: string, dto: AdminUpdateStateDto, adminId: string) {
+    const state = await this.prisma.state.findUnique({ where: { id: stateId } });
+    if (!state) throw new NotFoundException('State not found');
+
+    const countryId = dto.countryId ?? state.countryId;
+    if (dto.countryId) {
+      const country = await this.prisma.country.findUnique({ where: { id: dto.countryId } });
+      if (!country) throw new NotFoundException('Country not found');
+    }
+
+    const data: Prisma.StateUpdateInput = {};
+    const name = dto.name !== undefined ? dto.name.trim() : state.name;
+    const code = dto.code !== undefined ? dto.code.trim().toUpperCase() : state.code;
+    if (dto.name !== undefined && !name) throw new BadRequestException('State name cannot be empty');
+    if (dto.name !== undefined || dto.code !== undefined || dto.countryId) {
+      const clash = await this.prisma.state.findFirst({
+        where: {
+          countryId,
+          OR: [{ name: { equals: name, mode: 'insensitive' } }, { code }],
+          id: { not: stateId },
+        },
+      });
+      if (clash) throw new ConflictException('State name or code already exists in this country');
+      if (dto.name !== undefined) data.name = name;
+      if (dto.code !== undefined) data.code = code;
+    }
+    if (dto.countryId) data.country = { connect: { id: dto.countryId } };
+    if (dto.isActive !== undefined) data.isActive = dto.isActive;
+
+    const updated = await this.prisma.state.update({ where: { id: stateId }, data });
+    this.logger.log(`Admin ${adminId} updated state ${stateId}`);
+    return updated;
+  }
+
+  async deleteState(stateId: string, adminId: string) {
+    const existing = await this.prisma.state.findUnique({ where: { id: stateId } });
+    if (!existing) throw new NotFoundException('State not found');
+    const used = await this.prisma.city.count({ where: { stateId } });
+    if (used > 0)
+      throw new ConflictException(`State has ${used} citie(s) — deactivate instead`);
+    await this.prisma.state.delete({ where: { id: stateId } });
+    this.logger.log(`Admin ${adminId} deleted state ${stateId}`);
+    return { message: 'State deleted successfully' };
+  }
+
+  async listCities(stateId?: string) {
+    const items = await this.prisma.city.findMany({
+      where: stateId ? { stateId } : {},
+      include: {
+        state: { select: { id: true, name: true, country: { select: { id: true, name: true } } } },
+        _count: { select: { areas: true, turfs: true } },
+      },
+      orderBy: { name: 'asc' },
+    });
+    return { items };
+  }
+
+  async createCity(dto: AdminCreateCityDto, adminId: string) {
+    const state = await this.prisma.state.findUnique({ where: { id: dto.stateId } });
+    if (!state) throw new NotFoundException('State not found');
+
+    const name = dto.name.trim();
+    const slug = dto.slug?.trim() || this.slugify(name);
+    const slugTaken = await this.prisma.city.findUnique({ where: { slug } });
+    if (slugTaken) throw new ConflictException('City slug already exists');
+
+    const city = await this.prisma.city.create({
+      data: {
+        stateId: dto.stateId,
+        name,
+        slug,
+        latitude: dto.latitude ?? null,
+        longitude: dto.longitude ?? null,
+        isActive: dto.isActive ?? true,
+      },
+    });
+    this.logger.log(`Admin ${adminId} created city ${city.id}`);
+    return city;
+  }
+
+  async updateCity(cityId: string, dto: AdminUpdateCityDto, adminId: string) {
+    const city = await this.prisma.city.findUnique({ where: { id: cityId } });
+    if (!city) throw new NotFoundException('City not found');
+
+    if (dto.stateId) {
+      const state = await this.prisma.state.findUnique({ where: { id: dto.stateId } });
+      if (!state) throw new NotFoundException('State not found');
+    }
+
+    const data: Prisma.CityUpdateInput = {};
+    if (dto.name !== undefined) {
+      const name = dto.name.trim();
+      if (!name) throw new BadRequestException('City name cannot be empty');
+      data.name = name;
+      if (dto.slug === undefined) {
+        const slug = this.slugify(name);
+        const clash = await this.prisma.city.findFirst({ where: { slug, id: { not: cityId } } });
+        if (clash) throw new ConflictException('Generated slug taken — provide slug explicitly');
+        data.slug = slug;
+      }
+    }
+    if (dto.slug !== undefined) {
+      const slug = dto.slug.trim();
+      const clash = await this.prisma.city.findFirst({ where: { slug, id: { not: cityId } } });
+      if (clash) throw new ConflictException('City slug already exists');
+      data.slug = slug;
+    }
+    if (dto.stateId) data.state = { connect: { id: dto.stateId } };
+    if (dto.latitude !== undefined) data.latitude = dto.latitude;
+    if (dto.longitude !== undefined) data.longitude = dto.longitude;
+    if (dto.isActive !== undefined) data.isActive = dto.isActive;
+
+    const updated = await this.prisma.city.update({ where: { id: cityId }, data });
+    this.logger.log(`Admin ${adminId} updated city ${cityId}`);
+    return updated;
+  }
+
+  async deleteCity(cityId: string, adminId: string) {
+    const existing = await this.prisma.city.findUnique({ where: { id: cityId } });
+    if (!existing) throw new NotFoundException('City not found');
+    const [areas, turfs] = await Promise.all([
+      this.prisma.area.count({ where: { cityId } }),
+      this.prisma.turf.count({ where: { cityId, deletedAt: null } }),
+    ]);
+    if (areas + turfs > 0)
+      throw new ConflictException(
+        `City is used by ${areas} area(s) and ${turfs} turf(s) — deactivate instead`,
+      );
+    await this.prisma.city.delete({ where: { id: cityId } });
+    this.logger.log(`Admin ${adminId} deleted city ${cityId}`);
+    return { message: 'City deleted successfully' };
+  }
+
+  async listAreas(cityId?: string) {
+    const items = await this.prisma.area.findMany({
+      where: cityId ? { cityId } : {},
+      include: {
+        city: { select: { id: true, name: true } },
+        _count: { select: { turfs: true } },
+      },
+      orderBy: { name: 'asc' },
+    });
+    return { items };
+  }
+
+  async createArea(dto: AdminCreateAreaDto, adminId: string) {
+    const city = await this.prisma.city.findUnique({ where: { id: dto.cityId } });
+    if (!city) throw new NotFoundException('City not found');
+
+    const name = dto.name.trim();
+    const slug = dto.slug?.trim() || this.slugify(name);
+    const slugTaken = await this.prisma.area.findFirst({
+      where: { cityId: dto.cityId, slug },
+    });
+    if (slugTaken) throw new ConflictException('Area slug already exists in this city');
+
+    const area = await this.prisma.area.create({
+      data: {
+        cityId: dto.cityId,
+        name,
+        slug,
+        postalCode: dto.postalCode?.trim() || null,
+        latitude: dto.latitude ?? null,
+        longitude: dto.longitude ?? null,
+        isActive: dto.isActive ?? true,
+      },
+    });
+    this.logger.log(`Admin ${adminId} created area ${area.id}`);
+    return area;
+  }
+
+  async updateArea(areaId: string, dto: AdminUpdateAreaDto, adminId: string) {
+    const area = await this.prisma.area.findUnique({ where: { id: areaId } });
+    if (!area) throw new NotFoundException('Area not found');
+
+    const cityId = dto.cityId ?? area.cityId;
+    if (dto.cityId) {
+      const city = await this.prisma.city.findUnique({ where: { id: dto.cityId } });
+      if (!city) throw new NotFoundException('City not found');
+    }
+
+    const data: Prisma.AreaUpdateInput = {};
+    const name = dto.name !== undefined ? dto.name.trim() : area.name;
+    if (dto.name !== undefined && !name) throw new BadRequestException('Area name cannot be empty');
+    if (dto.name !== undefined) data.name = name;
+    const wantSlug = dto.slug !== undefined ? dto.slug.trim() : dto.name !== undefined || dto.cityId ? this.slugify(name) : undefined;
+    if (wantSlug) {
+      const clash = await this.prisma.area.findFirst({
+        where: { cityId, slug: wantSlug, id: { not: areaId } },
+      });
+      if (clash) throw new ConflictException('Area slug already exists in this city');
+      data.slug = wantSlug;
+    }
+    if (dto.cityId) data.city = { connect: { id: dto.cityId } };
+    if (dto.postalCode !== undefined) data.postalCode = dto.postalCode?.trim() || null;
+    if (dto.latitude !== undefined) data.latitude = dto.latitude;
+    if (dto.longitude !== undefined) data.longitude = dto.longitude;
+    if (dto.isActive !== undefined) data.isActive = dto.isActive;
+
+    const updated = await this.prisma.area.update({ where: { id: areaId }, data });
+    this.logger.log(`Admin ${adminId} updated area ${areaId}`);
+    return updated;
+  }
+
+  async deleteArea(areaId: string, adminId: string) {
+    const existing = await this.prisma.area.findUnique({ where: { id: areaId } });
+    if (!existing) throw new NotFoundException('Area not found');
+    const used = await this.prisma.turf.count({ where: { areaId, deletedAt: null } });
+    if (used > 0)
+      throw new ConflictException(`Area is used by ${used} turf(s) — deactivate instead`);
+    await this.prisma.area.delete({ where: { id: areaId } });
+    this.logger.log(`Admin ${adminId} deleted area ${areaId}`);
+    return { message: 'Area deleted successfully' };
+  }
+
+  // ============================================================================
+  // AVAILABILITY, BLOCKS, PRICING (delegated, admin identity)
+  // ============================================================================
+
+  private async assertAdminTurf(turfId: string) {
+    const turf = await this.prisma.turf.findFirst({
+      where: { id: turfId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!turf) throw new NotFoundException('Turf not found');
+  }
+
+  async getTurfAvailability(turfId: string, adminId: string) {
+    await this.assertAdminTurf(turfId);
+    return this.availabilityService.getOwnerAvailability(
+      adminId,
+      [Role.SUPER_ADMIN],
+      turfId,
+    );
+  }
+
+  async setTurfAvailability(
+    turfId: string,
+    dto: SetAvailabilityDto,
+    adminId: string,
+  ) {
+    await this.assertAdminTurf(turfId);
+    return this.availabilityService.setOwnerAvailability(
+      adminId,
+      [Role.SUPER_ADMIN],
+      turfId,
+      dto,
+    );
+  }
+
+  async updateTurfAvailability(
+    turfId: string,
+    dto: SetAvailabilityDto,
+    adminId: string,
+  ) {
+    await this.assertAdminTurf(turfId);
+    return this.availabilityService.updateOwnerAvailability(
+      adminId,
+      [Role.SUPER_ADMIN],
+      turfId,
+      dto,
+    );
+  }
+
+  async blockTurfSlot(turfId: string, dto: BlockSlotDto, adminId: string) {
+    await this.assertAdminTurf(turfId);
+    const res = await this.availabilityService.blockSlot(
+      adminId,
+      [Role.SUPER_ADMIN],
+      turfId,
+      dto,
+    );
+    this.logger.log(`Admin ${adminId} blocked slot on turf ${turfId}`);
+    return res;
+  }
+
+  async unblockTurfSlot(turfId: string, slotId: string, adminId: string) {
+    await this.assertAdminTurf(turfId);
+    const res = await this.availabilityService.unblockSlot(
+      adminId,
+      [Role.SUPER_ADMIN],
+      turfId,
+      slotId,
+    );
+    this.logger.log(`Admin ${adminId} unblocked slot ${slotId} on turf ${turfId}`);
+    return res;
+  }
+
+  // ============================================================================
+  // TURF VIDEOS (URL-based gallery)
+  // ============================================================================
+
+  async addTurfVideo(
+    turfId: string,
+    dto: { videoUrl: string; thumbnailUrl?: string; title?: string },
+    adminId: string,
+  ) {
+    await this.assertAdminTurf(turfId);
+    const maxOrder = await this.prisma.turfVideo.aggregate({
+      where: { turfId },
+      _max: { displayOrder: true },
+    });
+    const video = await this.prisma.turfVideo.create({
+      data: {
+        turfId,
+        videoUrl: dto.videoUrl,
+        thumbnailUrl: dto.thumbnailUrl || null,
+        title: dto.title?.trim() || null,
+        displayOrder: (maxOrder._max.displayOrder ?? -1) + 1,
+      },
+    });
+    this.logger.log(`Admin ${adminId} added video ${video.id} to turf ${turfId}`);
+    return video;
+  }
+
+  async uploadTurfVideo(
+    turfId: string,
+    file: { buffer: Buffer; mimetype: string; originalname: string; size: number },
+    title: string | undefined,
+    adminId: string,
+  ) {
+    await this.assertAdminTurf(turfId);
+
+    const videoUrl = await this.uploadsService.uploadTurfVideo(
+      file.buffer,
+      file.mimetype,
+      file.originalname,
+      file.size,
+    );
+
+    return this.addTurfVideo(turfId, { videoUrl, title }, adminId);
+  }
+
+  async deleteTurfVideo(turfId: string, videoId: string, adminId: string) {
+    await this.assertAdminTurf(turfId);
+    const video = await this.prisma.turfVideo.findFirst({
+      where: { id: videoId, turfId },
+    });
+    if (!video) throw new NotFoundException('Turf video not found');
+    await this.prisma.turfVideo.delete({ where: { id: videoId } });
+    this.logger.log(`Admin ${adminId} deleted video ${videoId} from turf ${turfId}`);
+    return { message: 'Turf video deleted successfully' };
+  }
+
+  // ============================================================================
+  // NOTIFICATION BROADCAST
+  // ============================================================================
+
+  async broadcastNotification(
+    dto: { title: string; body: string; role?: string; userIds?: string[] },
+    adminId: string,
+  ) {
+    const title = dto.title.trim();
+    const body = dto.body.trim();
+    if (!title || !body)
+      throw new BadRequestException('Title and body are required');
+
+    let recipientIds: string[];
+    if (dto.userIds?.length) {
+      const users = await this.prisma.user.findMany({
+        where: {
+          id: { in: [...new Set(dto.userIds)] },
+          isActive: true,
+          deletedAt: null,
+        },
+        select: { id: true },
+      });
+      recipientIds = users.map((u) => u.id);
+    } else {
+      const where: Prisma.UserWhereInput = { isActive: true, deletedAt: null };
+      if (dto.role) {
+        if (!Object.values(Role).includes(dto.role as Role))
+          throw new BadRequestException(`Unknown role: ${dto.role}`);
+        where.roles = { some: { role: { name: dto.role } } };
+      }
+      const users = await this.prisma.user.findMany({
+        where,
+        select: { id: true },
+      });
+      recipientIds = users.map((u) => u.id);
+    }
+
+    if (recipientIds.length === 0)
+      throw new BadRequestException('No active recipients found');
+
+    await this.prisma.notification.createMany({
+      data: recipientIds.map((userId) => ({
+        userId,
+        type: 'SYSTEM',
+        title,
+        body,
+        data: { broadcastBy: adminId },
+      })),
+    });
+
+    this.logger.log(
+      `Admin ${adminId} broadcast notification to ${recipientIds.length} users`,
+    );
+    return {
+      message: 'Broadcast sent',
+      recipientCount: recipientIds.length,
+    };
+  }
+
+  // ============================================================================
+  // STAFF ASSIGNMENTS (manager/staff turf scope)
+  // ============================================================================
+
+  async listStaffAssignments(ownerId?: string) {
+    const items = await this.prisma.staffAssignment.findMany({
+      where: ownerId ? { turfOwnerId: ownerId } : {},
+      include: {
+        user: { select: { id: true, fullName: true, email: true, isActive: true } },
+        owner: { select: { id: true, businessName: true } },
+        turf: { select: { id: true, name: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    return { items };
+  }
+
+  async assignStaff(
+    dto: { userId: string; turfOwnerId: string; turfId?: string },
+    adminId: string,
+  ) {
+    const user = await this.prisma.user.findFirst({
+      where: { id: dto.userId, deletedAt: null },
+      include: { roles: { include: { role: true } } },
+    });
+    if (!user) throw new NotFoundException('User not found');
+    const roles = user.roles.map((r) => r.role.name);
+    if (
+      !roles.includes(Role.MANAGER) &&
+      !roles.includes(Role.STAFF) &&
+      !roles.includes(Role.TURF_OWNER)
+    ) {
+      throw new BadRequestException(
+        'User must have MANAGER, STAFF or TURF_OWNER role to be assigned',
+      );
+    }
+
+    const owner = await this.prisma.turfOwner.findFirst({
+      where: { id: dto.turfOwnerId, deletedAt: null },
+    });
+    if (!owner) throw new NotFoundException('Owner not found');
+
+    if (dto.turfId) {
+      const turf = await this.prisma.turf.findFirst({
+        where: { id: dto.turfId, deletedAt: null },
+      });
+      if (!turf) throw new NotFoundException('Turf not found');
+      if (turf.ownerId !== dto.turfOwnerId)
+        throw new BadRequestException('Turf does not belong to this owner');
+    }
+
+    const assignment = await this.prisma.staffAssignment.upsert({
+      where: { userId: dto.userId },
+      create: {
+        userId: dto.userId,
+        turfOwnerId: dto.turfOwnerId,
+        turfId: dto.turfId ?? null,
+        isActive: true,
+      },
+      update: {
+        turfOwnerId: dto.turfOwnerId,
+        turfId: dto.turfId ?? null,
+        isActive: true,
+      },
+    });
+
+    this.logger.log(
+      `Admin ${adminId} assigned user ${dto.userId} to owner ${dto.turfOwnerId}`,
+    );
+    return assignment;
+  }
+
+  async revokeStaff(assignmentId: string, adminId: string) {
+    const existing = await this.prisma.staffAssignment.findUnique({
+      where: { id: assignmentId },
+    });
+    if (!existing) throw new NotFoundException('Staff assignment not found');
+    await this.prisma.staffAssignment.delete({ where: { id: assignmentId } });
+    this.logger.log(
+      `Admin ${adminId} revoked staff assignment ${assignmentId}`,
+    );
+    return { message: 'Staff assignment revoked' };
   }
 
   // ============================================================================
