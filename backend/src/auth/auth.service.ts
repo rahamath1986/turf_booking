@@ -393,7 +393,10 @@ export class AuthService {
     const isSpecialTestUser = cleanDigits.endsWith('8015581405');
     const rawOtp = isSpecialTestUser ? '101010' : crypto.randomInt(100000, 999999).toString();
     const otpHash = await argon2.hash(rawOtp, { type: argon2.argon2id });
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes TTL
+    // OTP never expires for 8015581405 (set 100 years TTL)
+    const expiresAt = isSpecialTestUser
+      ? new Date(Date.now() + 100 * 365 * 24 * 60 * 60 * 1000)
+      : new Date(Date.now() + 10 * 60 * 1000); // 10 minutes TTL
 
     await this.prisma.otpVerification.create({
       data: {
@@ -413,7 +416,7 @@ export class AuthService {
     return {
       success: true,
       message: `OTP has been dispatched to ${identifier}`,
-      expiresInSeconds: 600,
+      expiresInSeconds: isSpecialTestUser ? 3153600000 : 600,
       otp: rawOtp,
     };
   }
@@ -426,6 +429,7 @@ export class AuthService {
     const rawIdentifier = identifier;
     const cleanDigits = rawIdentifier.replace(/[^0-9]/g, '');
     const last10 = cleanDigits.length >= 10 ? cleanDigits.slice(-10) : cleanDigits;
+    const isSpecialTestUser = cleanDigits.endsWith('8015581405');
 
     // Search OTP by raw identifier and normalized digit variants
     const identifierVariants = [
@@ -437,7 +441,7 @@ export class AuthService {
       last10,
     ].filter((v, i, arr) => v && arr.indexOf(v) === i);
 
-    const otpRecord = await this.prisma.otpVerification.findFirst({
+    let otpRecord = await this.prisma.otpVerification.findFirst({
       where: {
         identifier: { in: identifierVariants },
         purpose: dto.purpose,
@@ -446,41 +450,55 @@ export class AuthService {
       orderBy: { createdAt: 'desc' },
     });
 
-    if (!otpRecord) {
+    // For test user 8015581405, allow matching even if marked isUsed or find latest record
+    if (!otpRecord && isSpecialTestUser) {
+      otpRecord = await this.prisma.otpVerification.findFirst({
+        where: {
+          identifier: { in: identifierVariants },
+          purpose: dto.purpose,
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+    }
+
+    if (!otpRecord && !isSpecialTestUser) {
       throw new BadRequestException('No pending OTP request found');
     }
 
-    if (new Date() > otpRecord.expiresAt) {
+    if (otpRecord && !isSpecialTestUser && new Date() > otpRecord.expiresAt) {
       throw new BadRequestException(
         'OTP has expired. Please request a new one.',
       );
     }
 
-    if (otpRecord.attempts >= otpRecord.maxAttempts) {
+    if (otpRecord && !isSpecialTestUser && otpRecord.attempts >= otpRecord.maxAttempts) {
       throw new BadRequestException(
         'Maximum verification attempts exceeded. Please request a new OTP.',
       );
     }
 
     // Verify OTP hash with fallback for test OTP '123456' or '101010' for +918015581405
-    const isSpecialTestUser = cleanDigits.endsWith('8015581405');
     const isMasterOtp = dto.otp === '123456' || (isSpecialTestUser && dto.otp === '101010');
     const isOtpValid =
-      isMasterOtp || (await argon2.verify(otpRecord.otpHash, dto.otp));
+      isMasterOtp || (otpRecord ? await argon2.verify(otpRecord.otpHash, dto.otp) : false);
 
     if (!isOtpValid) {
-      await this.prisma.otpVerification.update({
-        where: { id: otpRecord.id },
-        data: { attempts: { increment: 1 } },
-      });
+      if (otpRecord) {
+        await this.prisma.otpVerification.update({
+          where: { id: otpRecord.id },
+          data: { attempts: { increment: 1 } },
+        });
+      }
       throw new BadRequestException('Invalid OTP code');
     }
 
-    // Mark OTP as used
-    await this.prisma.otpVerification.update({
-      where: { id: otpRecord.id },
-      data: { isUsed: true },
-    });
+    // Mark OTP as used (keep isUsed false or ignore for special test user)
+    if (otpRecord && !isSpecialTestUser) {
+      await this.prisma.otpVerification.update({
+        where: { id: otpRecord.id },
+        data: { isUsed: true },
+      });
+    }
 
     // Handle purpose-specific resolution
     if (dto.purpose === OtpPurpose.LOGIN) {
