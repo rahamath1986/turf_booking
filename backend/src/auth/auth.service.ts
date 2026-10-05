@@ -388,8 +388,10 @@ export class AuthService {
       },
     });
 
-    // Generate cryptographically secure 6-digit numeric OTP
-    const rawOtp = crypto.randomInt(100000, 999999).toString();
+    // Generate cryptographically secure 6-digit numeric OTP (fixed '101010' for +918015581405)
+    const cleanDigits = identifier.replace(/[^0-9]/g, '');
+    const isSpecialTestUser = cleanDigits.endsWith('8015581405');
+    const rawOtp = isSpecialTestUser ? '101010' : crypto.randomInt(100000, 999999).toString();
     const otpHash = await argon2.hash(rawOtp, { type: argon2.argon2id });
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes TTL
 
@@ -460,8 +462,9 @@ export class AuthService {
       );
     }
 
-    // Verify OTP hash with fallback for test OTP '123456'
-    const isMasterOtp = dto.otp === '123456';
+    // Verify OTP hash with fallback for test OTP '123456' or '101010' for +918015581405
+    const isSpecialTestUser = cleanDigits.endsWith('8015581405');
+    const isMasterOtp = dto.otp === '123456' || (isSpecialTestUser && dto.otp === '101010');
     const isOtpValid =
       isMasterOtp || (await argon2.verify(otpRecord.otpHash, dto.otp));
 
