@@ -100,4 +100,38 @@ export class UsersService {
       roles: updatedUser.roles.map((r) => r.role.name),
     };
   }
+
+  async deleteAccount(userId: string) {
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId, deletedAt: null },
+    });
+
+    if (!user) {
+      throw new NotFoundException("User profile not found or already deleted");
+    }
+
+    // 1. Soft delete the user
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        deletedAt: new Date(),
+        isActive: false,
+      },
+    });
+
+    // 2. Revoke and invalidate all active refresh tokens/sessions
+    await this.prisma.refreshToken.deleteMany({
+      where: { userId },
+    });
+
+    // 3. Unregister all user push devices
+    await this.prisma.userDevice.deleteMany({
+      where: { userId },
+    });
+
+    return {
+      success: true,
+      message: "Account and associated data deleted successfully",
+    };
+  }
 }

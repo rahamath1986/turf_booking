@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Patch,
+  Delete,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -46,5 +47,14 @@ export class UsersController {
     @Body() dto: UpdateProfileDto,
   ) {
     return this.usersService.updateProfile(userId, dto);
+  }
+
+  @Delete("profile")
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth("JWT-auth")
+  @ApiOperation({ summary: "Delete current authenticated user account and data" })
+  @ApiResponse({ status: 200, description: "Account deleted successfully" })
+  deleteAccount(@CurrentUser("userId") userId: string) {
+    return this.usersService.deleteAccount(userId);
   }
 }
