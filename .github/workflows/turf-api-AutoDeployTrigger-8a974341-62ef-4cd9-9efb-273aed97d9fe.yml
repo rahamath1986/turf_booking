@@ -47,9 +47,9 @@ jobs:
       - name: Azure Login
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.TURFAPI_AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.TURFAPI_AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.TURFAPI_AZURE_SUBSCRIPTION_ID }}
+          client-id: 0fc917dd-2453-4598-a2ed-c0c59bf73d60
+          tenant-id: 5ae56ac5-3d34-4213-83ca-2b8ffd870af0
+          subscription-id: 133e33e9-63f9-4693-9a3c-e3ce9c75a5ee
 
       - name: Deploy to Azure Container App
         uses: azure/container-apps-deploy-action@v2
