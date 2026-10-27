@@ -70,7 +70,7 @@ async function bootstrap() {
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
-      forbidNonWhitelisted: true,
+      // forbidNonWhitelisted: true,
       transform: true,
       transformOptions: {
         enableImplicitConversion: true,
@@ -101,6 +101,15 @@ async function bootstrap() {
       },
       'JWT-auth',
     )
+    .addServer(
+      "https://app-service-api-c3hwa9dpeggseyb5.centralindia-01.azurewebsites.net/turf",
+      "Unified Web App (/turf)",
+    )
+    .addServer(
+      "https://turf-api.gentlerock-8d88694a.centralindia.azurecontainerapps.io",
+      "Direct Azure Container App",
+    )
+    .addServer("http://localhost:4000", "Local Development")
     .addTag('Health', 'System liveness and database readiness probes')
     .addTag('Auth', 'Authentication, JWT token rotation, and RBAC')
     .addTag('Users', 'User directory and profiles')
@@ -126,6 +135,9 @@ async function bootstrap() {
       operationsSorter: 'alpha',
     },
   });
+
+  app.getHttpAdapter().get("/docs", (req: any, res: any) => res.redirect("/api/docs"));
+  app.getHttpAdapter().get("/swagger", (req: any, res: any) => res.redirect("/api/docs"));
 
   await app.listen(port);
   logger.log(`🚀 Application listening on: http://localhost:${port}`);
