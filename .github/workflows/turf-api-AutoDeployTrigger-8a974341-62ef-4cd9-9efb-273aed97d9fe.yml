@@ -10,7 +10,7 @@ on:
       - "!backend/docs/**"
       - ".github/workflows/turf-api-AutoDeployTrigger*"
 
-  workflow_dispatch:      
+  # Trigger on commit\n  workflow_dispatch:      
 
 jobs:
   build-and-deploy:
