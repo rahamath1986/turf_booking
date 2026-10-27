@@ -1,29 +1,48 @@
 name: Trigger auto deployment for turf-api
 
-# When this action will be executed
 on:
-  # Automatically trigger it ONLY when detected changes in backend folder
   push:
     branches: 
       - main
     paths:
-      - 'backend/**'
-      - '!backend/**/*.md'
-      - '!backend/docs/**'
+      - "backend/**"
+      - "!backend/**/*.md"
+      - "!backend/docs/**"
+      - ".github/workflows/turf-api-AutoDeployTrigger*"
 
-  # Allow manual trigger 
   workflow_dispatch:      
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
     permissions: 
-      id-token: write # This is required for requesting the OIDC JWT Token
-      contents: read # Required when GH token is used to authenticate with private repo
+      id-token: write
+      contents: read
+      packages: write
 
     steps:
-      - name: Checkout to the branch
+      - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image to GHCR
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/rahamath1986/turf-backend:latest
+            ghcr.io/rahamath1986/turf-backend:${{ github.sha }}
 
       - name: Azure Login
         uses: azure/login@v2
@@ -32,14 +51,12 @@ jobs:
           tenant-id: ${{ secrets.TURFAPI_AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.TURFAPI_AZURE_SUBSCRIPTION_ID }}
 
-      - name: Build and push container image to registry
+      - name: Deploy to Azure Container App
         uses: azure/container-apps-deploy-action@v2
         with:
-          appSourcePath: ${{ github.workspace }}/backend
-          dockerfilePath: Dockerfile
-          registryUrl: turfregistry.azurecr.io
-          registryUsername: ${{ secrets.TURFAPI_REGISTRY_USERNAME }}
-          registryPassword: ${{ secrets.TURFAPI_REGISTRY_PASSWORD }}
           containerAppName: turf-api
           resourceGroup: rg-sansamg-platform
-          imageToBuild: turfregistry.azurecr.io/turf-backend:${{ github.sha }}
+          imageToDeploy: ghcr.io/rahamath1986/turf-backend:${{ github.sha }}
+          registryUrl: ghcr.io
+          registryUsername: ${{ github.actor }}
+          registryPassword: ${{ secrets.GITHUB_TOKEN }}
