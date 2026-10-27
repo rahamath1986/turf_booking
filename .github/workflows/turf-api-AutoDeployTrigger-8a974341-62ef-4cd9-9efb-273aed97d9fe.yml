@@ -10,7 +10,8 @@ on:
       - "!backend/docs/**"
       - ".github/workflows/turf-api-AutoDeployTrigger*"
 
-  # Trigger on commit\n  workflow_dispatch:      
+  # Trigger on commit
+  workflow_dispatch:      
 
 jobs:
   build-and-deploy:
@@ -41,8 +42,10 @@ jobs:
           file: ./backend/Dockerfile
           push: true
           tags: |
-            ghcr.io/rahamath1986/turf-backend:latest
-            ghcr.io/rahamath1986/turf-backend:${{ github.sha }}
+            ghcr.io/rahamath1986/turf_booking:latest
+            ghcr.io/rahamath1986/turf_booking:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/rahamath1986/turf_booking
 
       - name: Azure Login
         uses: azure/login@v2
@@ -52,11 +55,8 @@ jobs:
           subscription-id: 133e33e9-63f9-4693-9a3c-e3ce9c75a5ee
 
       - name: Deploy to Azure Container App
-        uses: azure/container-apps-deploy-action@v2
-        with:
-          containerAppName: turf-api
-          resourceGroup: rg-sansamg-platform
-          imageToDeploy: ghcr.io/rahamath1986/turf-backend:${{ github.sha }}
-          registryUrl: ghcr.io
-          registryUsername: ${{ github.actor }}
-          registryPassword: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          az containerapp update \
+            --name turf-api \
+            --resource-group rg-sansamg-platform \
+            --image ghcr.io/rahamath1986/turf_booking:latest
