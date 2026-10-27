@@ -12,7 +12,7 @@ For backend instructions, API documentation, and migration guides, refer to [bac
 ## Live URLs
 
 - Admin panel: `https://turf-admin.gentlerock-8d88694a.centralindia.azurecontainerapps.io/login`
-- API: `https://turf-api.gentlerock-8d88694a.centralindia.azurecontainerapps.io/api/v1`
+- API: `https://app-service-api-c3hwa9dpeggseyb5.centralindia-01.azurewebsites.net/turf/api/v1`
 
 ## Admin Credentials (demo seed data)
 

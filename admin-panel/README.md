@@ -8,7 +8,7 @@ platform. Consumes the NestJS backend API (`/api/v1/admin/*`). Only
 
 | Environment | Panel                          | API                                      |
 | ----------- | ------------------------------ | ---------------------------------------- |
-| Live        | `https://turf-admin.gentlerock-8d88694a.centralindia.azurecontainerapps.io/login` | `https://turf-api.gentlerock-8d88694a.centralindia.azurecontainerapps.io/api/v1` |
+| Live        | `https://turf-admin.gentlerock-8d88694a.centralindia.azurecontainerapps.io/login` | `https://app-service-api-c3hwa9dpeggseyb5.centralindia-01.azurewebsites.net/turf/api/v1` |
 | Local       | `http://localhost:3000/login`  | `http://localhost:4000/api/v1`           |
 
 ## Admin Credentials (demo seed data)
